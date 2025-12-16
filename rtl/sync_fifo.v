@@ -1,3 +1,4 @@
+`timescale 1 ns / 1 ps
 //计数器法实现同步FIFO
 module	sync_fifo
 #(

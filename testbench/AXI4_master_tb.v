@@ -4,123 +4,162 @@
 
 module AXI4_master_tb;
 
-	
+
+    // 输入信号
+    reg    [32 - 1 : 0]         w_target_slave_base_addr_i  ;   
+    reg    [16 - 1 : 0]         w_total_byte_num_i          ;   
+    reg                         w_start_i                   ;   
+    reg    [32 - 1 : 0]         w_data_i                    ;   
+    reg                         w_data_valid_i              ;   
+    // 输出信号
+    wire                        w_busy_o                    ;   
+    wire    [32 - 1 : 0]        w_sram_addr_o               ;   
+    wire                        w_sram_data_request_o       ;   
+    wire                        w_error_o                   ;   
+    // axi read control interface
+    // 输入信号
+    reg    [32 - 1 : 0]         r_target_slave_base_addr_i  ;   
+    reg    [16 - 1 : 0]         r_total_byte_num_i          ;   
+    reg                         r_start_i                   ;   
+    // 输出信号
+    wire                        r_busy_o                    ;   
+    wire    [32 - 1 : 0]        r_sram_addr_o               ;   
+    wire                        r_sram_data_valid_o         ;   
+    wire    [32 - 1 : 0]        r_sram_data_o               ;   
+    wire                        r_error_o                   ;
+
+always @(posedge clk_ddrmc or negedge axi_rstn) begin
+    if(!axi_rstn)
+        w_data_i <= 1'd0;
+    else begin
+        if(w_sram_data_request_o)
+            w_data_i <= w_sram_addr_o;
+        else
+            w_data_i <= w_data_i;
+    end
+end
+
+always @(posedge clk_ddrmc or negedge axi_rstn) begin
+    if(!axi_rstn)
+        w_data_valid_i <= 1'd0;
+    else begin
+        if(w_sram_data_request_o)
+            w_data_valid_i <= 1'b1;
+        else
+            w_data_valid_i <= 1'b0;
+    end
+end
+
+initial begin
+    w_target_slave_base_addr_i = 32'h0000_0000;
+    w_total_byte_num_i         = 16'd0;
+    w_start_i                  = 1'b0;
+    r_target_slave_base_addr_i = 32'h0000_0000;
+    r_total_byte_num_i         = 16'd0;
+    r_start_i                  = 1'b0;
+    #(simulation_cycle * 10) ;
+    w_target_slave_base_addr_i = 32'h0000_0000;
+    w_total_byte_num_i         = 16'd4096;
+    w_start_i                  = 1'b1;
+    #(simulation_cycle) ;
+    w_start_i                  = 1'b0;
+    #20us ;
+    $finish;
+end
+
 AXI4_master # (
-    .C_M00_AXI_TARGET_SLAVE_BASE_ADDR   (),
-    .C_M00_AXI_BURST_LEN	            (),
-    .C_M00_AXI_ID_WIDTH	                (),
-    .C_M00_AXI_ADDR_WIDTH	            (),
-    .C_M00_AXI_DATA_WIDTH	            (),
-    .C_M00_AXI_AWUSER_WIDTH	            (),
-    .C_M00_AXI_ARUSER_WIDTH	            (),
-    .C_M00_AXI_WUSER_WIDTH	            (),
-    .C_M00_AXI_RUSER_WIDTH	            (),
-    .C_M00_AXI_BUSER_WIDTH	            ()             
+    .TRAN_BYTE_NUM_WIDTH(16),   // 传输总字节数位宽
+    .SRAM_ADDR_WIDTH    (32),   // sram 目标基地址位宽
+    .M_AXI_ID_WIDTH	    (14),
+    .M_AXI_ADDR_WIDTH	(32),
+    .M_AXI_DATA_WIDTH	(32),
+    .M_AXI_AWUSER_WIDTH	(0),
+    .M_AXI_ARUSER_WIDTH	(0),
+    .M_AXI_WUSER_WIDTH	(0),
+    .M_AXI_RUSER_WIDTH	(0),
+    .M_AXI_BUSER_WIDTH	(0)             
 )u_AXI4_master(
-    .m00_axi_init_axi_txn(),
-    .m00_axi_txn_done    (),
-    .m00_axi_error       (),
-    .m00_axi_aclk        (),
-    .m00_axi_aresetn     (),
-    .m00_axi_awid        (),
-    .m00_axi_awaddr      (),
-    .m00_axi_awlen       (),
-    .m00_axi_awsize      (),
-    .m00_axi_awburst     (),
-    .m00_axi_awlock      (),
-    .m00_axi_awcache     (),
-    .m00_axi_awprot      (),
-    .m00_axi_awqos       (),
-    .m00_axi_awuser      (),
-    .m00_axi_awvalid     (),
-    .m00_axi_awready     (),
-    .m00_axi_wdata       (),
-    .m00_axi_wstrb       (),
-    .m00_axi_wlast       (),
-    .m00_axi_wuser       (),
-    .m00_axi_wvalid      (),
-    .m00_axi_wready      (),
-    .m00_axi_bid         (),
-    .m00_axi_bresp       (),
-    .m00_axi_buser       (),
-    .m00_axi_bvalid      (),
-    .m00_axi_bready      (),
-    .m00_axi_arid        (),
-    .m00_axi_araddr      (),
-    .m00_axi_arlen       (),
-    .m00_axi_arsize      (),
-    .m00_axi_arburst     (),
-    .m00_axi_arlock      (),
-    .m00_axi_arcache     (),
-    .m00_axi_arprot      (),
-    .m00_axi_arqos       (),
-    .m00_axi_aruser      (),
-    .m00_axi_arvalid     (),
-    .m00_axi_arready     (),
-    .m00_axi_rid         (),
-    .m00_axi_rdata       (),
-    .m00_axi_rresp       (),
-    .m00_axi_rlast       (),
-    .m00_axi_ruser       (),
-    .m00_axi_rvalid      (),
-    .m00_axi_rready      () 
+// 时钟复位
+    .clk  (clk_ddrmc    ),
+    .rst_n(axi_rstn     ),
+// axi write control interface
+
+    .w_target_slave_base_addr_i(w_target_slave_base_addr_i),  
+    .w_total_byte_num_i        (w_total_byte_num_i        ),  
+    .w_start_i                 (w_start_i                 ),  
+    .w_data_i                  (w_data_i                  ),  
+    .w_data_valid_i            (w_data_valid_i            ),  
+
+    .w_busy_o             (w_busy_o             ),  
+    .w_sram_addr_o        (w_sram_addr_o        ),  
+    .w_sram_data_request_o(w_sram_data_request_o),  
+    .w_error_o            (w_error_o            ),  
+// axi read control interface
+
+    .r_target_slave_base_addr_i(r_target_slave_base_addr_i),  
+    .r_total_byte_num_i        (r_total_byte_num_i        ),  
+    .r_start_i                 (r_start_i                 ),  
+
+    .r_busy_o           (r_busy_o           ),   
+    .r_sram_addr_o      (r_sram_addr_o      ),   
+    .r_sram_data_valid_o(r_sram_data_valid_o),   
+    .r_sram_data_o      (r_sram_data_o      ),   
+    .r_error_o          (r_error_o          ),
+// AXI4 Master Interface
+    // AW 信号
+    .m_axi_awid   (AWID_port7        ),
+    .m_axi_awaddr (AWADDR_port7[31:0]),
+    .m_axi_awlen  (AWLEN_port7       ),
+    .m_axi_awsize (AWSIZE_port7      ),
+    .m_axi_awburst(AWBURST_port7     ),
+    .m_axi_awlock (                  ),
+    .m_axi_awcache(                  ),
+    .m_axi_awprot (                  ),
+    .m_axi_awqos  (                  ),
+    .m_axi_awuser (                  ),
+    .m_axi_awvalid(AWVALID_port7     ),
+    .m_axi_awready(AWREADY_port7     ),
+    // W 信号
+    .m_axi_wdata (WDATA_port7   ),
+    .m_axi_wstrb (WSTRB_port7   ),
+    .m_axi_wlast (WLAST_port7   ),
+    .m_axi_wuser (              ),
+    .m_axi_wvalid(WVALID_port7  ),
+    .m_axi_wready(WREADY_port7  ),
+    // B 信号
+    .m_axi_bid   (BID_port7     ),
+    .m_axi_bresp (BRESP_port7   ),
+    .m_axi_buser (              ),
+    .m_axi_bvalid(BVALID_port7  ),
+    .m_axi_bready(BREADY_port7  ),
+    // AR 信号
+    .m_axi_arid   (ARID_port7        ),
+    .m_axi_araddr (ARADDR_port7[31:0]),
+    .m_axi_arlen  (ARLEN_port7       ),
+    .m_axi_arsize (ARSIZE_port7      ),
+    .m_axi_arburst(ARBURST_port7     ),
+    .m_axi_arlock (                  ),
+    .m_axi_arcache(                  ),
+    .m_axi_arprot (                  ),
+    .m_axi_arqos  (                  ),
+    .m_axi_aruser (                  ),
+    .m_axi_arvalid(ARVALID_port7     ),
+    .m_axi_arready(ARREADY_port7     ),
+    // R 信号
+    .m_axi_rid   (RID_port7     ),
+    .m_axi_rdata (RDATA_port7   ),
+    .m_axi_rresp (RRESP_port7   ),
+    .m_axi_rlast (RLAST_port7   ),
+    .m_axi_ruser (              ),
+    .m_axi_rvalid(RVALID_port7  ),
+    .m_axi_rready(RREADY_port7  ) 
 );
-	
+
+
+
+
+
 endmodule
 
-`ifdef DDRMC_PORT7_EN
 
-    .ACLK_port7                     (ACLK_port7                                 ), // input 
-    .ARESETn_port7                  (ARESETn_port7                              ), // input 
 
-    .AWURGENT_port7                 (AWURGENT_port7                             ), // input 
-    .ARURGENT_port7                 (ARURGENT_port7                             ), // input 
-    .awqos_urgent_port7             (awqos_urgent_port7[3:0]                    ), // input 
-    .arqos_urgent_port7             (arqos_urgent_port7[3:0]                    ), // input 
-    .CSYSREQ_port7                  (CSYSREQ_port7                              ), // input 
-    .CSYSACK_port7                  (CSYSACK_port7                              ), // output
-    .CACTIVE_port7                  (CACTIVE_port7                              ), // output
-
-    .AWID_port7                     (AWID_port7[`AXI7_ID_WIDTH-1:0]             ), // input 
-    .AWUSER_port7                   (4'h0                                       ), // input yang_new_add
-    .AWADDR_port7                   (AWADDR_port7[`AXI7_ADDR_WIDTH-1:0]         ), // input 
-    .AWLEN_port7                    (AWLEN_port7[7:0]                           ), // input 
-    .AWSIZE_port7                   (AWSIZE_port7[2:0]                          ), // input 
-    .AWBURST_port7                  (AWBURST_port7[1:0]                         ), // input 
-    .AWQOS_port7                    (AWQOS_port7[3:0]                           ), // input 
-    .AWVALID_port7                  (AWVALID_port7                              ), // input 
-    .AWLOCK_port7                   (1'b0                                       ), // input yang_new_add
-    .AWREADY_port7                  (AWREADY_port7                              ), // output
-
-    .WDATA_port7                    (WDATA_port7[`AXI7_DATA_WIDTH-1:0]          ), // input 
-    .WSTRB_port7                    (WSTRB_port7[`AXI7_STRB_WIDTH-1:0]          ), // input 
-    .WLAST_port7                    (WLAST_port7                                ), // input 
-    .WVALID_port7                   (WVALID_port7                               ), // input 
-    .WREADY_port7                   (WREADY_port7                               ), // output
-
-    .BID_port7                      (BID_port7[`AXI7_ID_WIDTH-1:0]              ), // output
-    .BUSER_port7                    (                                           ), // output yang_new_add
-    .BRESP_port7                    (BRESP_port7[1:0]                           ), // output
-    .BREADY_port7                   (BREADY_port7                               ), // input 
-    .BVALID_port7                   (BVALID_port7                               ), // output
-
-    .ARID_port7                     (ARID_port7[`AXI7_ID_WIDTH-1:0]             ), // input 
-    .ARUSER_port7                   (4'h0                                       ), // input yang_new_add
-    .ARADDR_port7                   (ARADDR_port7[`AXI7_ADDR_WIDTH-1:0]         ), // input 
-    .ARLEN_port7                    (ARLEN_port7[7:0]                           ), // input 
-    .ARSIZE_port7                   (ARSIZE_port7[2:0]                          ), // input 
-    .ARBURST_port7                  (ARBURST_port7[1:0]                         ), // input 
-    .ARQOS_port7                    (ARQOS_port7[3:0]                           ), // input 
-    .ARVALID_port7                  (ARVALID_port7                              ), // input 
-    .ARLOCK_port7                   (1'b0                                       ), // input yang_new_add
-    .ARREADY_port7                  (ARREADY_port7                              ), // output
-
-    .RID_port7                      (RID_port7[`AXI7_ID_WIDTH-1:0]              ), // output
-    .RUSER_port7                    (                                           ), // output yang_new_add
-    .RDATA_port7                    (RDATA_port7[`AXI7_DATA_WIDTH-1:0]          ), // output
-    .RRESP_port7                    (RRESP_port7[1:0]                           ), // output
-    .RLAST_port7                    (RLAST_port7                                ), // output
-    .RREADY_port7                   (RREADY_port7                               ), // input 
-    .RVALID_port7                   (RVALID_port7                               ), // output
-
-`endif

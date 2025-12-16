@@ -19,7 +19,7 @@ module AXI4_read_ctrl #(
 // 输出信号
     output  reg                                     r_busy_o                    ,   // AXI 总线空闲 1有效
     output  reg     [SRAM_ADDR_WIDTH - 1 : 0]       r_sram_addr_o               ,   // sram 地址输出
-    output  reg                                     r_sram_data_valid_o         ,   // sram 数据请求输出
+    output  reg     [AXI_DATA_WIDTH/8 - 1 : 0]      r_sram_data_valid_o         ,   // sram 数据请求输出
     output  wire    [AXI_DATA_WIDTH - 1 : 0]        r_sram_data_o               ,   // sram 数据输出
     output  reg                                     r_error_o                   ,   // Asserts when ERROR is detected   
 // AR 信号
@@ -66,21 +66,24 @@ module AXI4_read_ctrl #(
     reg  	                                axi_arvalid             ;
     reg     [7 : 0]                         axi_arlen               ;
     reg  	                                axi_rready              ;
-
+    reg    [AXI_DATA_WIDTH - 1 : 0]         axi_rdata               ;
+    reg  [AXI_ADDR_WIDTH - 1 : 0]           r_target_slave_base_addr;
     reg  	                                start_single_burst_read ;
     reg  	                                burst_read_active       ;
-    
+    reg     [TRAN_BYTE_NUM_WIDTH : 0]       byte_remain_num         ;
+    reg                                     last_strb_en            ;
+    reg     [AXI_STRB_WIDTH - 1 : 0]        last_strb               ;
+    reg                                     start_strb_en           ;
+    reg     [AXI_STRB_WIDTH - 1 : 0]        start_strb              ;                 
     wire  	                                read_resp_error         ;        // Interface response error flags
     wire  	                                rnext                   ;
-
-    reg    [AXI_DATA_WIDTH - 1 : 0]        axi_rdata                ;
-
+    wire    [TRAN_BYTE_NUM_WIDTH : 0]       r_total_byte_num        ;
 
 // I/O Connections assignments
 
 //Read Address (AR)
     assign M_AXI_ARID	    = 'b0;
-    assign M_AXI_ARADDR	    = r_target_slave_base_addr_i + axi_araddr;
+    assign M_AXI_ARADDR	    = r_target_slave_base_addr + axi_araddr;
     assign M_AXI_ARLEN	    = axi_arlen;
     assign M_AXI_ARSIZE	    = STRB_LOG2;
     assign M_AXI_ARBURST	= 2'b01;
@@ -93,22 +96,85 @@ module AXI4_read_ctrl #(
 //Read and Read Response (R)
     assign M_AXI_RREADY	= axi_rready;
 
-// 数据字节数预处理
-    wire strb_en;
-    assign strb_en = (r_total_byte_num_i[STRB_LOG2 - 1 : 0] > 0) ? 1'b1 : 1'b0;
+    assign r_total_byte_num = r_total_byte_num_i + r_target_slave_base_addr_i[STRB_LOG2 - 1 : 0];
+// 地址对齐
+    always @(posedge clk or negedge rst_n) begin
+        if(!rst_n)
+            r_target_slave_base_addr <= 'b0;
+        else begin
+            if(r_start_i)
+                r_target_slave_base_addr <= r_target_slave_base_addr_i - r_target_slave_base_addr_i[STRB_LOG2 - 1 : 0];
+            else
+                r_target_slave_base_addr <= r_target_slave_base_addr;
+        end
+    end
 
-    wire [AXI_DATA_WIDTH - 1 : 0] last_wstrb;
-    assign last_wstrb = (r_total_byte_num_i[STRB_LOG2 - 1 : 0] > 0) ? (1 << (r_total_byte_num_i[STRB_LOG2 - 1 : 0]<<3)) -1:0;
+// 字节有效信号生成
+    always @(posedge clk or negedge rst_n) begin
+        if(!rst_n)
+            last_strb_en <= 1'b0;
+        else begin
+            if(r_start_i)
+                if(r_total_byte_num[STRB_LOG2 - 1 : 0] > 0)
+                    last_strb_en <= 1'b1;
+                else
+                    last_strb_en <= 1'b0;
+            else
+                last_strb_en <= last_strb_en;
+        end
+    end
 
+    always @(posedge clk or negedge rst_n) begin
+        if(!rst_n)
+            last_strb <= 'b0;
+        else begin
+            if(r_start_i) begin
+                if(r_total_byte_num[STRB_LOG2 - 1 : 0] > 0)
+                    last_strb <= (32'b1 << r_total_byte_num[STRB_LOG2 - 1 : 0]) - 1'b1;
+                else
+                    last_strb <= 'b0;
+            end
+            else
+                last_strb <= last_strb;
+        end
+    end
 
-    // 计算 剩余待传输字节数
-    reg [TRAN_BYTE_NUM_WIDTH - 1 : 0] byte_remain_num;
+    always @(posedge clk or negedge rst_n) begin
+        if(!rst_n)
+            start_strb_en <= 1'b0;
+        else begin
+            if(r_start_i && r_target_slave_base_addr_i[STRB_LOG2 - 1 : 0] > 0)
+                start_strb_en <= 1'b1;
+            else if (rnext && start_strb_en)
+                start_strb_en <= 1'b0;
+            else
+                start_strb_en <= start_strb_en;
+        end
+    end
+    
+
+    always @(posedge clk or negedge rst_n) begin
+        if(!rst_n)
+            start_strb <= 1'b0;
+        else begin
+            if(r_start_i) begin
+                if(r_target_slave_base_addr_i[STRB_LOG2 - 1 : 0] > 0)
+                    start_strb <= {AXI_STRB_WIDTH{1'b1}} << r_target_slave_base_addr_i[STRB_LOG2 - 1 : 0];
+                else
+                    start_strb <= 'b0;
+            end
+            else
+                start_strb <= start_strb;
+        end
+    end
+
+// 计算 剩余待传输字节数
     always @(posedge clk or negedge rst_n) begin
         if(!rst_n)
             byte_remain_num <= 1'b0;
         else begin
             if(r_start_i)
-                byte_remain_num <= r_total_byte_num_i;  
+                byte_remain_num <= r_total_byte_num;  
             else if (M_AXI_ARREADY && axi_arvalid) begin
                 if(byte_remain_num >= MAX_TRANSACTIONS_BYTE_NUM)
                     byte_remain_num <= byte_remain_num - MAX_TRANSACTIONS_BYTE_NUM;
@@ -133,10 +199,10 @@ module AXI4_read_ctrl #(
                 if(byte_remain_num >= MAX_TRANSACTIONS_BYTE_NUM)
                     axi_arlen <= 8'd255;
                 else begin
-                    if(strb_en)
+                    if(byte_remain_num[STRB_LOG2 - 1 : 0] > 0)
                         axi_arlen <= (byte_remain_num >> STRB_LOG2);
                     else
-                        axi_arlen <= (byte_remain_num >> STRB_LOG2) - 1;
+                        axi_arlen <= (byte_remain_num >> STRB_LOG2) - 1'b1;
                 end
             end
             else
@@ -154,14 +220,14 @@ module AXI4_read_ctrl #(
                 axi_arvalid <= 1'b0;
             else
                 axi_arvalid <= axi_arvalid;
-            end
+        end
     end   
 
 
     // Next address after ARREADY indicates previous address acceptance  
     always @(posedge clk or negedge rst_n) begin 
         if (!rst_n)
-            axi_araddr <= 'b0;
+            axi_araddr <= 1'b0;
         else begin
             if(r_start_i)
                 axi_araddr <= 1'b0;
@@ -226,12 +292,8 @@ module AXI4_read_ctrl #(
         if (!rst_n) 
             axi_rdata <= 1'd0;
         else begin
-            if (rnext) begin
-                if(M_AXI_RLAST && (byte_remain_num == 0) && strb_en)
-                    axi_rdata <= M_AXI_RDATA & last_wstrb;
-                else
-                    axi_rdata <= M_AXI_RDATA;
-            end
+            if (rnext)
+                axi_rdata <= M_AXI_RDATA;
             else
                 axi_rdata <= axi_rdata;
         end
@@ -244,7 +306,12 @@ module AXI4_read_ctrl #(
             r_sram_data_valid_o <= 1'b0;
         else begin
             if(rnext)
-                r_sram_data_valid_o <= 1'b1;
+                if(start_strb_en)
+                    r_sram_data_valid_o <= start_strb;
+                else if(M_AXI_RLAST && (byte_remain_num == 0) && last_strb_en)
+                    r_sram_data_valid_o <= last_strb;
+                else
+                    r_sram_data_valid_o <= {AXI_STRB_WIDTH{1'b1}};
             else
                 r_sram_data_valid_o <= 1'b0;
         end
@@ -304,7 +371,7 @@ module AXI4_read_ctrl #(
         end
     end
     
-    
+    // AXI 读忙信号生成
     always @(posedge clk or negedge rst_n)  begin
         if (!rst_n)
             r_busy_o <= 1'b0;
