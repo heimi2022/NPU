@@ -96,7 +96,6 @@ module AXI4_read_ctrl #(
 //Read and Read Response (R)
     assign M_AXI_RREADY	= axi_rready;
 
-    assign r_total_byte_num = r_total_byte_num_i + r_target_slave_base_addr_i[STRB_LOG2 - 1 : 0];
 // 地址对齐
     always @(posedge clk or negedge rst_n) begin
         if(!rst_n)
@@ -110,6 +109,7 @@ module AXI4_read_ctrl #(
     end
 
 // 字节有效信号生成
+    // 计算最后一个传输的字节使能信号和使能位
     always @(posedge clk or negedge rst_n) begin
         if(!rst_n)
             last_strb_en <= 1'b0;
@@ -139,6 +139,7 @@ module AXI4_read_ctrl #(
         end
     end
 
+    // 计算起始传输的字节使能信号和使能位
     always @(posedge clk or negedge rst_n) begin
         if(!rst_n)
             start_strb_en <= 1'b0;
@@ -169,6 +170,8 @@ module AXI4_read_ctrl #(
     end
 
 // 计算 剩余待传输字节数
+    assign r_total_byte_num = r_total_byte_num_i + r_target_slave_base_addr_i[STRB_LOG2 - 1 : 0];
+
     always @(posedge clk or negedge rst_n) begin
         if(!rst_n)
             byte_remain_num <= 1'b0;
@@ -186,11 +189,42 @@ module AXI4_read_ctrl #(
         end
     end
 
+// 突发读控制信号生成
+    // 突发读启动信号生成
+    always @ (posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            start_single_burst_read <= 1'b0;
+        else begin
+            if (r_busy_o)begin
+                if (~axi_arvalid && ~burst_read_active && ~start_single_burst_read)
+                    start_single_burst_read <= 1'b1;
+                else
+                    start_single_burst_read <= 1'b0; 
+            end  
+            else 
+                start_single_burst_read <= 1'b0;
+        end
+    end
+    
+    // 突发读传输活动标志
+    always @(posedge clk or negedge rst_n)begin
+        if (!rst_n)
+            burst_read_active <= 1'b0;
+        else begin
+            if(r_start_i)
+                burst_read_active <= 1'b0;
+            else if (start_single_burst_read)
+                burst_read_active <= 1'b1;
+            else if (M_AXI_RVALID && axi_rready && M_AXI_RLAST)
+                burst_read_active <= 0;   
+        end
+    end
 
 //----------------------------
 //Read Address Channel
 //----------------------------
 
+    // 突发长度设置 突发长度 = axi_arlen + 1
     always @(posedge clk or negedge rst_n) begin
         if(!rst_n)
             axi_arlen <= 1'b0;
@@ -210,6 +244,7 @@ module AXI4_read_ctrl #(
         end
     end
 
+    // 读地址 有效信号 生成
     always @(posedge clk or negedge rst_n) begin 
         if (!rst_n)
             axi_arvalid <= 1'b0;
@@ -224,7 +259,7 @@ module AXI4_read_ctrl #(
     end   
 
 
-    // Next address after ARREADY indicates previous address acceptance  
+    // 读地址
     always @(posedge clk or negedge rst_n) begin 
         if (!rst_n)
             axi_araddr <= 1'b0;
@@ -265,7 +300,21 @@ module AXI4_read_ctrl #(
            
     //Flag any read response errors
     assign read_resp_error = axi_rready & M_AXI_RVALID & M_AXI_RRESP[1];  
-
+//----------------------------------
+// error register
+//----------------------------------
+    always @(posedge clk or negedge rst_n) begin 
+        if (!rst_n) 
+            r_error_o <= 1'b0;
+        else begin
+            if(r_start_i)
+                r_error_o <= 1'b0;
+            else if (read_resp_error)  
+                r_error_o <= 1'b1;
+            else
+                r_error_o <= r_error_o;
+        end
+    end   
 
 //--------------------------------
 // sram 输出
@@ -317,60 +366,6 @@ module AXI4_read_ctrl #(
         end
     end
 
-//----------------------------------
-// error register
-//----------------------------------
-    always @(posedge clk or negedge rst_n) begin 
-        if (!rst_n) 
-            r_error_o <= 1'b0;
-        else begin
-            if(r_start_i)
-                r_error_o <= 1'b0;
-            else if (read_resp_error)  
-                r_error_o <= 1'b1;
-            else
-                r_error_o <= r_error_o;
-        end
-    end   
-
-
-
-    
-    //implement master command interface state machine
-    always @ (posedge clk or negedge rst_n) begin
-        if (!rst_n)
-            start_single_burst_read <= 1'b0;
-        else begin
-            if (r_busy_o)begin
-                if (~axi_arvalid && ~burst_read_active && ~start_single_burst_read)
-                    start_single_burst_read <= 1'b1;
-                else
-                    start_single_burst_read <= 1'b0; 
-            end  
-            else 
-                start_single_burst_read <= 1'b0;
-        end
-    end
-    
-
-
-    
-    // burst_read_active signal is asserted when there is a burst write transaction
-    // is initiated by the assertion of start_single_burst_write. start_single_burst_read
-    // signal remains asserted until the burst read is accepted by the master
-    always @(posedge clk or negedge rst_n)begin
-        if (!rst_n)
-            burst_read_active <= 1'b0;
-        else begin
-            if(r_start_i)
-                burst_read_active <= 1'b0;
-            else if (start_single_burst_read)
-                burst_read_active <= 1'b1;
-            else if (M_AXI_RVALID && axi_rready && M_AXI_RLAST)
-                burst_read_active <= 0;   
-        end
-    end
-    
     // AXI 读忙信号生成
     always @(posedge clk or negedge rst_n)  begin
         if (!rst_n)
@@ -384,6 +379,5 @@ module AXI4_read_ctrl #(
                 r_busy_o <= r_busy_o; 
         end
     end
-
-
+    
 endmodule

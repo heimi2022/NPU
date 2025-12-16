@@ -67,31 +67,30 @@ module AXI4_write_ctrl #(
 
 // AXI4LITE signals
     //AXI4 internal temp signals
-    reg     [AXI_ADDR_WIDTH-1 : 0]      axi_awaddr; // 地址偏移量
-    reg  	                            axi_awvalid;
-    reg     [7 : 0]                     axi_awlen;
-    reg     [AXI_STRB_WIDTH-1 : 0]      axi_wstrb;
-    reg  	                            axi_wlast;
-    reg  	                            axi_wvalid;
-    reg  	                            axi_bready;
-    reg    [AXI_ADDR_WIDTH - 1 : 0]     w_target_slave_base_addr; // 写基地址寄存器
+    reg     [AXI_ADDR_WIDTH-1 : 0]      axi_awaddr              ; // 地址偏移量
+    reg  	                            axi_awvalid             ;
+    reg     [7 : 0]                     axi_awlen               ;
+    reg     [AXI_STRB_WIDTH-1 : 0]      axi_wstrb               ;
+    reg  	                            axi_wlast               ;
+    reg  	                            axi_wvalid              ;
+    reg  	                            axi_bready              ;
+    reg     [AXI_ADDR_WIDTH - 1 : 0]    w_target_slave_base_addr; // 写基地址寄存器
     // write beat count in a burst
-    reg     [7 : 0] 	                write_index;
+    reg     [7 : 0] 	                write_index             ;
 
-    // The burst counters are used to track the number of burst transfers of AXI_BURST_LEN burst length needed to transfer 2^C_MASTER_LENGTH bytes of data.
     reg  	                            start_single_burst_write;
-    reg  	                            burst_write_active;
-    reg [TRAN_BYTE_NUM_WIDTH : 0]       byte_remain_num;
+    reg  	                            burst_write_active      ;
+    reg [TRAN_BYTE_NUM_WIDTH : 0]       byte_remain_num         ;
 
-    wire  	                            write_resp_error;     // Interface response error flags
-    wire  	                            wnext;
-    wire [TRAN_BYTE_NUM_WIDTH : 0]      w_total_byte_num;
+    wire  	                            write_resp_error        ;     // Interface response error flags
+    wire  	                            wnext                   ;     // write data channel ready to accept data
+    wire [TRAN_BYTE_NUM_WIDTH : 0]      w_total_byte_num        ;
 
-    reg                                 last_strb_en;
-    reg [AXI_STRB_WIDTH - 1 : 0]        last_wstrb;
+    reg                                 last_strb_en            ;
+    reg [AXI_STRB_WIDTH - 1 : 0]        last_wstrb              ;
 
-    reg                                 start_strb_en;
-    reg [AXI_STRB_WIDTH - 1 : 0]        start_wstrb;
+    reg                                 start_strb_en           ;
+    reg [AXI_STRB_WIDTH - 1 : 0]        start_wstrb             ;
 
 // I/O Connections assignments
 
@@ -121,9 +120,9 @@ module AXI4_write_ctrl #(
 //Write Response (B)
     assign M_AXI_BREADY	= axi_bready;
 
-// 数据字节数预处理
-    assign w_total_byte_num = w_total_byte_num_i + w_target_slave_base_addr_i[STRB_LOG2 - 1 : 0];
 
+
+// 地址对齐
     always @(posedge clk or negedge rst_n) begin
         if(!rst_n)
             w_target_slave_base_addr <= 'b0;
@@ -135,7 +134,8 @@ module AXI4_write_ctrl #(
         end
     end
 
-
+// 字节有效信号生成
+    // 起始传输字节 掩码 信号生成
     always @(posedge clk or negedge rst_n) begin
         if(!rst_n)
             start_strb_en <= 1'b0;
@@ -164,6 +164,7 @@ module AXI4_write_ctrl #(
         end
     end
 
+    // 末尾传输字节 掩码 信号生成
     always @(posedge clk or negedge rst_n) begin
         if(!rst_n)
             last_strb_en <= 1'b0;
@@ -193,7 +194,10 @@ module AXI4_write_ctrl #(
         end
     end
 
+// 数据字节数预处理
     // 计算 剩余待传输字节数
+    assign w_total_byte_num = w_total_byte_num_i + w_target_slave_base_addr_i[STRB_LOG2 - 1 : 0];
+
     always @(posedge clk or negedge rst_n) begin
         if(!rst_n)
             byte_remain_num <= 1'b0;
@@ -213,7 +217,7 @@ module AXI4_write_ctrl #(
         end
     end
 
-
+// sram 相关信号输出
     // sram 地址偏移
     always @(posedge clk or negedge rst_n) begin 
         if(!rst_n)
@@ -231,10 +235,43 @@ module AXI4_write_ctrl #(
     // sram 数据请求信号生成
     assign w_sram_data_request_o = (M_AXI_AWREADY && axi_awvalid) || (wnext && !axi_wlast);
 
+// 突发写传输控制信号生成
+    // start_single_burst_write 信号用于启动一个突发写事务
+    always @(posedge clk or negedge rst_n) begin
+        if(!rst_n) 
+            start_single_burst_write <= 1'b0;
+        else begin
+            if(w_busy_o) begin
+                if (~axi_awvalid && ~start_single_burst_write && ~burst_write_active)
+                    start_single_burst_write <= 1'b1;
+                else
+                    start_single_burst_write <= 1'b0; //Negate to generate a pulse
+            end
+            else
+                start_single_burst_write <= 1'b0;
+        end
+    end
+    
+    
+    // burst_write_active signal is asserted when there is a burst write transaction
+    always @(posedge clk or negedge rst_n)begin
+        if (!rst_n)
+            burst_write_active <= 1'b0;
+        else begin
+            if(w_start_i)
+                burst_write_active <= 1'b0;
+            else if (start_single_burst_write)
+                burst_write_active <= 1'b1;
+            else if (M_AXI_BVALID && axi_bready)
+                burst_write_active <= 1'b0;  
+        end
+    end
+    
 //--------------------
 //Write Address Channel
 //--------------------
 
+    // 写突发长度计算 突发长度 = axi_awlen + 1
     always @(posedge clk or negedge rst_n) begin
         if(!rst_n) 
             axi_awlen <= 1'b0;
@@ -254,6 +291,7 @@ module AXI4_write_ctrl #(
         end
     end
 
+    // 写地址有效信号生成
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             axi_awvalid <= 1'b0;
@@ -269,7 +307,7 @@ module AXI4_write_ctrl #(
     end   
            
            
-// Next address after AWREADY indicates previous address acceptance    
+    // 写地址生成
     always @(posedge clk or negedge rst_n)begin   
         if (!rst_n)  
             axi_awaddr <= 1'b0;  
@@ -313,7 +351,7 @@ module AXI4_write_ctrl #(
 //--------------------
     assign wnext = M_AXI_WREADY & axi_wvalid;
     
-// WVALID logic, similar to the axi_awvalid always block above
+    // WVALID logic, similar to the axi_awvalid always block above
     always @(posedge clk or negedge rst_n) begin 
         if (!rst_n)
             axi_wvalid <= 1'b0;
@@ -328,8 +366,8 @@ module AXI4_write_ctrl #(
     end
         
         
-//WLAST generation on the MSB of a counter underflow    
-// WVALID logic, similar to the axi_awvalid always block above
+    //WLAST generation on the MSB of a counter underflow    
+    // WVALID logic, similar to the axi_awvalid always block above
     always @(posedge clk or negedge rst_n) begin 
         if (!rst_n) begin
             axi_wlast <= 1'b0;
@@ -382,9 +420,9 @@ module AXI4_write_ctrl #(
         end
     end
 
+// 写忙 及 写错误信号生成
     //Flag any write response errors
     assign write_resp_error = axi_bready & M_AXI_BVALID & M_AXI_BRESP[1]; 
-
 
     // AXI 写错误信号生成
     always @(posedge clk or negedge rst_n) begin 
@@ -415,36 +453,6 @@ module AXI4_write_ctrl #(
         end
     end
 
-    // start_single_burst_write 信号用于启动一个突发写事务
-    always @(posedge clk or negedge rst_n) begin
-        if(!rst_n) 
-            start_single_burst_write <= 1'b0;
-        else begin
-            if(w_busy_o) begin
-                if (~axi_awvalid && ~start_single_burst_write && ~burst_write_active)
-                    start_single_burst_write <= 1'b1;
-                else
-                    start_single_burst_write <= 1'b0; //Negate to generate a pulse
-            end
-            else
-                start_single_burst_write <= 1'b0;
-        end
-    end
-    
-    
-    // burst_write_active signal is asserted when there is a burst write transaction
-    always @(posedge clk or negedge rst_n)begin
-        if (!rst_n)
-            burst_write_active <= 1'b0;
-        else begin
-            if(w_start_i)
-                burst_write_active <= 1'b0;
-            else if (start_single_burst_write)
-                burst_write_active <= 1'b1;
-            else if (M_AXI_BVALID && axi_bready)
-                burst_write_active <= 1'b0;  
-        end
-    end
-    
+
 
 endmodule
