@@ -13,23 +13,23 @@ module fma_top#(
     input                        rst_n                              ,
     input                        state_select                       , //0:decode 1:prefill
 
-    input                        start_residual                     , //pulse,from PE
-    input                        start_post_attn_norm_sqrt          , //pulse,from PE
-    input                        start1_norm1                       ,
-    input                        start1_sum_norm1                   ,
-    input                        start2_norm1                       ,
-    input                        start1_RoPE                        ,
-    input                        start2_RoPE                        ,
+    input                               start_residual                     , //pulse,from PE
+    input                               start_post_attn_norm_sqrt          , //pulse,from PE
+    input                               start1_norm1                       ,
+    input                               start1_sum_norm1                   ,
+    input                               start2_norm1                       ,
+    input                               start1_RoPE                        ,
+    input                               start2_RoPE                        ,
 
-    input       [VALUE_MN*BW_FP -1:0]  O_proj                       , //8*4 pipeline,from PE
-    input       [VALUE_MN*BW_FP -1:0]  Z0                           , //8*4 from SRAM,512b
-    input       [VALUE_MN*BW_FP -1:0]  W_post_attn_norm             , //1*4 or 1*32 from SRAM,64*8b
-    input       [M*K*BW_FP      -1:0]  Input_norm1                  , //8*16 ,from SRAM
-    input       [K*BW_FP        -1:0]  W_norm1                      , //prefill 1*16     
-    input       [VALUE_MN*BW_FP -1:0]  QK_proj                      , 
-    input       [VALUE_MN*BW_FP -1:0]  W_cos                        , 
-    input       [VALUE_MN*BW_FP -1:0]  W_sin                        , 
-    input       [VALUE_MN*BW_FP -1:0]  buffer_post_attn_norm_in     , //from SRAM,512b
+    input       [VALUE_MN*BW_FP -1:0]   O_proj                       , //8*4 pipeline,from PE
+    input       [VALUE_MN*BW_FP -1:0]   Z0                           , //8*4 from SRAM,512b
+    input       [VALUE_MN*BW_FP -1:0]   W_post_attn_norm             , //1*4 or 1*32 from SRAM,64*8b
+    input       [M*K*BW_FP      -1:0]   Input_norm1                  , //8*16 ,from SRAM
+    input       [K*BW_FP        -1:0]   W_norm1                      , //prefill 1*16     
+    input       [VALUE_MN*BW_FP -1:0]   QK_proj                      , 
+    input       [VALUE_MN*BW_FP -1:0]   W_cos                        , 
+    input       [VALUE_MN*BW_FP -1:0]   W_sin                        , 
+    input       [VALUE_MN*BW_FP -1:0]   buffer_post_attn_norm_in     , //from SRAM,512b
 
     output      [M*K     *BW_FP   -1:0]  buffer_norm1_out           , //to SRAM,512b
     output      [VALUE_MN*BW_FP   -1:0]  buffer_post_attn_norm_out  , //to SRAM,512b
@@ -160,10 +160,10 @@ module fma_top#(
         else begin
             case ({busy_post_attn_norm,busy_norm1,busy_RoPE})
                 3'b001: begin
-                    mode    <= {{((128-2*VALUE_MN)*5    ){1'b0}},mode_RoPE };
-                    a       <= {{((128-2*VALUE_MN)*BW_FP){1'b0}},a_RoPE    };
-                    b       <= {{((128-2*VALUE_MN)*BW_FP){1'b0}},b_RoPE    };
-                    c       <= {{((128-2*VALUE_MN)*BW_FP){1'b0}},c_RoPE    };
+                    mode    <= mode_RoPE;
+                    a       <= a_RoPE   ;
+                    b       <= b_RoPE   ;
+                    c       <= c_RoPE   ;
                     align   <= 'b0 ;
                 end
                 3'b010: begin

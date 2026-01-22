@@ -48,7 +48,7 @@ module tb_fma_top;
     integer                         i,j                                 ;
     reg                             rope_start                          ;
     reg                             post_attn_norm_start                ;
-    reg     [7:0]                   seq_len                             ;
+    reg     [6:0]                   seq_len                             ;
 
 // rope
     reg     [BW_FP - 1:0]           sin                     [0:4095]    ; 
@@ -263,7 +263,6 @@ module tb_fma_top;
                 end
             end
         end
-
     end
 
 /******************** FSM ****************************/ 
@@ -293,10 +292,18 @@ module tb_fma_top;
                 next_state = busy_RoPE_fall ? ROPE_RESULT_SAVE : ROPE_STAGE2 ;
             ROPE_RESULT_SAVE:
                 next_state = STOP ;
-            POST_ATTN_NORM_RESIDUAL :   // TODO
-                next_state = busy_post_attn_norm_fall ? POST_ATTN_NORM_SQRT : POST_ATTN_NORM_RESIDUAL ;
+            POST_ATTN_NORM_RESIDUAL : begin  
+                if(busy_post_attn_norm_fall) begin
+                    if(post_attn_norm_hidden_size_cnt == 8'd255)
+                        next_state = POST_ATTN_NORM_SQRT ;
+                    else
+                        next_state = POST_ATTN_NORM_RESIDUAL ;
+                end
+                else
+                    next_state = POST_ATTN_NORM_RESIDUAL ;
+            end
             POST_ATTN_NORM_SQRT :
-                next_state = busy_post_attn_norm_fall ? POST_ATTN_NORM_RESULT_SAVE : POST_ATTN_NORM_SQRT ;
+                next_state = busy_post_attn_norm_fall ? POST_ATTN_NORM_RESIDUAL : POST_ATTN_NORM_SQRT ;
             POST_ATTN_NORM_RESULT_SAVE :
                 next_state = STOP ;
             STOP:    next_state = IDLE;
@@ -452,7 +459,7 @@ module tb_fma_top;
 		rst_n = 1'b0;
         rope_start = 1'b0;
         post_attn_norm_start = 1'b0;
-        seq_len = 8'd8;
+        seq_len = 7'd16;
 		#(`clk_period*5 + 1);
         rst_n = 1'b1;
 		#(`clk_period);
