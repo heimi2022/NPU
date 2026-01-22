@@ -403,7 +403,6 @@ module AXI4_write_ctrl #(
 //----------------------------
 //Write Response (B) Channel
 //----------------------------
-
     always @(posedge clk or negedge rst_n) begin    
         if (!rst_n) begin
             axi_bready <= 1'b0;  
@@ -452,7 +451,5 @@ module AXI4_write_ctrl #(
                 w_busy_o <= w_busy_o;
         end
     end
-
-
 
 endmodule
