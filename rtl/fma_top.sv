@@ -32,7 +32,7 @@ module fma_top#(
     input       [VALUE_MN*BW_FP -1:0]   buffer_post_attn_norm_in     , //from SRAM,512b
 
     output      [M*K     *BW_FP   -1:0]  buffer_norm1_out           , //to SRAM,512b
-    output      [VALUE_MN*BW_FP   -1:0]  buffer_post_attn_norm_out  , //to SRAM,512b
+    output      [VALUE_MN*2*BW_FP -1:0]  buffer_post_attn_norm_out  , 
     output                               rms_result_valid           ,
     output                               scaled_x_valid             ,
     output      [VALUE_MN*2*BW_FP -1:0]  buffer_RoPE                ,
@@ -66,7 +66,7 @@ module fma_top#(
         .BW_FP    (BW_FP    ) ,
         .BW_INT   (BW_INT   ) ,
         .VALUE_MN (VALUE_MN )
-    )post_attn_norm_ctrl(
+    )u_post_attn_norm_ctrl(
         //input
         .clk                            (clk                        ),
         .rst_n                          (rst_n                      ),

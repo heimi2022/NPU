@@ -37,7 +37,7 @@ module tb_fma_top;
     reg     [VALUE_MN*BW_FP -1:0]   W_sin                               ; 
     reg     [VALUE_MN*BW_FP -1:0]   buffer_post_attn_norm_in            ; //from SRAM,512b
     wire    [M*K     *BW_FP   -1:0] buffer_norm1_out                    ; //to SRAM,512b
-    wire    [VALUE_MN*BW_FP   -1:0] buffer_post_attn_norm_out           ; //to SRAM,512b
+    wire    [VALUE_MN*2*BW_FP   -1:0] buffer_post_attn_norm_out           ; //to SRAM,512b
     wire                            rms_result_valid                    ; // post_attn_norm
     wire                            scaled_x_valid                      ; // post_attn_norm
     wire    [VALUE_MN*2*BW_FP -1:0] buffer_RoPE                         ;
@@ -75,7 +75,9 @@ module tb_fma_top;
     wire                            busy_post_attn_norm_fall            ;
     reg     [7:0]                   post_attn_norm_hidden_size_cnt      ;
     reg                             post_attn_norm_ready                ;
-    reg     [BW_FP - 1:0]           scaled_x                [0:16383]   ;
+    reg     [BW_FP - 1:0]           scaled_x                [0:16383]   ; // 8 * 2048 = 16384
+
+    reg     [3:0]                   post_attn_norm_seq_cnt              ; // seq 计数器  +1 表示 进8
 
 // FSM
     reg     [4:0]                   state, next_state                   ;
@@ -259,11 +261,15 @@ module tb_fma_top;
         else if (scaled_x_valid) begin
             for (i = 0; i < M; i = i + 1) begin
                 for (j = 0; j < N; j = j + 1) begin
-                    scaled_x[HIDDEN_SIZE*i + j + post_attn_norm_hidden_size_cnt*N] <= buffer_post_attn_norm_out[N*(i+M)*BW_FP + j*BW_FP +: BW_FP] ;
+                    scaled_x[HIDDEN_SIZE*(i + post_attn_norm_seq_cnt * 8) + j + post_attn_norm_hidden_size_cnt*N] <= buffer_post_attn_norm_out[N*(i+M)*BW_FP + j*BW_FP +: BW_FP] ;
                 end
             end
         end
     end
+
+    // always @(posedge clk or negedge rst_n) begin
+    //     if()
+    // end
 
 /******************** FSM ****************************/ 
 
@@ -411,6 +417,7 @@ module tb_fma_top;
             Z0 <= 1'b0;
             buffer_post_attn_norm_in <= 1'b0;
             W_post_attn_norm <= 1'b0;
+            post_attn_norm_seq_cnt <= 1'b0;
         end 
         else begin
             case(state)
@@ -423,6 +430,7 @@ module tb_fma_top;
                     Z0 <= 1'b0;
                     buffer_post_attn_norm_in <= 1'b0;
                     W_post_attn_norm <= 1'b0;
+                    post_attn_norm_seq_cnt <= 1'b0;
                 end
                 POST_ATTN_NORM_RESIDUAL : begin
                     if(!post_attn_norm_ready) begin
@@ -430,9 +438,9 @@ module tb_fma_top;
                         post_attn_norm_ready <= 1'b1;
                         for(i = 0; i < M ; i = i + 1) begin
                             for(j = 0; j < N; j = j + 1) begin
-                                O_proj[N*i*BW_FP + j*BW_FP +: BW_FP] <= l0_O_proj[HIDDEN_SIZE*i + j + post_attn_norm_hidden_size_cnt*N];
-                                Z0[N*i*BW_FP + j*BW_FP +: BW_FP] <= l0_input[HIDDEN_SIZE*i + j + post_attn_norm_hidden_size_cnt*N];
-                                buffer_post_attn_norm_in[N*i*BW_FP + j*BW_FP +: BW_FP] <= scaled_x[HIDDEN_SIZE*i + j + post_attn_norm_hidden_size_cnt*N];
+                                O_proj[N*i*BW_FP + j*BW_FP +: BW_FP] <= l0_O_proj[HIDDEN_SIZE*(i + post_attn_norm_seq_cnt * 8) + j + post_attn_norm_hidden_size_cnt*N];
+                                Z0[N*i*BW_FP + j*BW_FP +: BW_FP] <= l0_input[HIDDEN_SIZE*(i + post_attn_norm_seq_cnt * 8) + j + post_attn_norm_hidden_size_cnt*N];
+                                buffer_post_attn_norm_in[N*i*BW_FP + j*BW_FP +: BW_FP] <= scaled_x[HIDDEN_SIZE*(i + post_attn_norm_seq_cnt * 8) + j + post_attn_norm_hidden_size_cnt*N];
                             end
                         end
                         for(j = 0; j < N; j = j + 1) begin
@@ -442,6 +450,9 @@ module tb_fma_top;
                     else if(busy_post_attn_norm_fall) begin
                         post_attn_norm_ready <= 1'd0;
                         post_attn_norm_hidden_size_cnt <= post_attn_norm_hidden_size_cnt + 1'd1;
+                        if(post_attn_norm_hidden_size_cnt == 8'd255) begin
+                            post_attn_norm_seq_cnt <= post_attn_norm_seq_cnt + 1'd1;
+                        end
                     end
                     else begin
                         start_residual <= 1'b0;
@@ -454,7 +465,7 @@ module tb_fma_top;
         end
     end
 
-/******************** Result check ****************************/ 
+/******************** initial ****************************/ 
 	initial begin
 		rst_n = 1'b0;
         rope_start = 1'b0;
@@ -468,7 +479,7 @@ module tb_fma_top;
         #(`clk_period);
         rope_start = 1'b0;
         post_attn_norm_start = 1'b0;
-        #(`clk_period*500);
+        #(`clk_period*20000);
 		$finish;		
 	end
 	
