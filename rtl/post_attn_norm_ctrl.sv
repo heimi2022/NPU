@@ -15,7 +15,8 @@ module post_attn_norm_ctrl#(
     input       [VALUE_MN*BW_FP -1:0]   O_proj                      , //8*8 or 1*64
     input       [VALUE_MN*BW_FP -1:0]   Z0                          , //8*8 or 1*64
     input       [VALUE_MN*BW_FP -1:0]   W_post_attn_norm            , //1*8(prefill) or 1*64(decode)
-    input       [VALUE_MN*BW_FP -1:0]   FMA_out                     ,     
+    input       [VALUE_MN*BW_FP -1:0]   FMA_out                     , 
+    input       [VALUE_MN*BW_MAN -1:0]  int_part                    ,
 
     output                              busy                        ,
     output  reg [VALUE_MN*5     -1:0]   mode_post_attn_norm         ,
@@ -32,12 +33,15 @@ module post_attn_norm_ctrl#(
 );
     localparam M = 8;
     localparam N = 8;
-    localparam CYCLE1 = 5'd18 ;
-    localparam CYCLE2 = 5'd5  ;
+    localparam CYCLE1 = 5'd20 ;
+    localparam CYCLE2 = 5'd3  ;
     reg [4:0] cnt ;
     reg [VALUE_MN*BW_FP -1:0] residual_out ;
-    reg [BW_FP          -1:0] psum_norm    [0:M-1];
-    reg [BW_FP          -1:0] alpha        [0:M-1];
+    reg [BW_FP          -1:0] psum_norm     [0:M-1];
+    reg [BW_FP          -1:0] alpha         [0:M-1];
+    reg [BW_EXP         -1:0] alpha_exp     [0:M-1];
+
+    reg rms_result_output_flag ;    
 
     reg busy1,busy2 ;
     assign busy = busy1 || busy2 ;
@@ -172,7 +176,7 @@ module post_attn_norm_ctrl#(
                         end
                     end
                 end
-                {5'd12}:begin  //13: INPUT of ADD5 4-2
+                {5'd12}:begin  //12: INPUT of ADD5 4-2
                     if(!state_select) begin  //decode
                         mode_post_attn_norm[31*5 +:5]      = {5'b01000};
                         a_post_attn_norm[31*BW_FP+:BW_FP]  = FMA_out[31*BW_FP+:BW_FP] ;
@@ -188,7 +192,7 @@ module post_attn_norm_ctrl#(
                         mode_post_attn_norm = 'b0;
                     end
                 end
-                {5'd14}:begin  //15: INPUT of ADD6 2-1
+                {5'd14}:begin  //14: INPUT of ADD6 2-1
                     if(!state_select) begin
                         mode_post_attn_norm[63*5 +:5]      = {5'b01000};
                         a_post_attn_norm[63*BW_FP+:BW_FP]  = FMA_out[63*BW_FP+:BW_FP] ;
@@ -201,7 +205,7 @@ module post_attn_norm_ctrl#(
                         mode_post_attn_norm = 'b0;
                     end
                 end
-                {5'd16}:begin  //17: INPUT of ADD6 2-1
+                {5'd16}:begin  //16: INPUT of ADD6 2-1
                     if(!state_select) begin
                         mode_post_attn_norm[63*5 +:5]      = {5'b01000};
                         a_post_attn_norm[63*BW_FP+:BW_FP]  = FMA_out[63*BW_FP+:BW_FP] ;
@@ -214,7 +218,7 @@ module post_attn_norm_ctrl#(
                         mode_post_attn_norm = 'b0;
                     end
                 end
-                {5'd17}:begin  //18: INPUT of mul alpha 
+                {5'd17}:begin  //17: INPUT of mul alpha 
                     for(i=0;i<M;i=i+1) begin
                         mode_post_attn_norm[N*i*5+:N*5]       = {N{5'b00010}}   ;
                         a_post_attn_norm[N*i*BW_FP+:N*BW_FP]  = state_select ? {N{alpha[i]}} : {N{alpha[0]}} ;
@@ -242,32 +246,21 @@ module post_attn_norm_ctrl#(
         else if(busy2) begin
             case({cnt})
                 {5'd0}:begin 
-                    if(state_select) begin 
-                        for(i=1;i<M;i=i+1) begin
-                            mode_post_attn_norm[N*i*5+:5]       = 5'b00001;
-                            a_post_attn_norm[N*i*BW_FP+:BW_FP]  = {8'd7,psum_norm[i][BW_FP-1:BW_MAN],1'b0} ;
-                            c_post_attn_norm[N*i*BW_FP+:BW_FP]  = psum_norm[i][BW_MAN] ? 17'h008f0 : 17'h00a88 ; //7.5/8.5
-                        end
+                    for(i=0;i<M;i=i+1) begin
+                        mode_post_attn_norm[N*i*5+:5]       = 5'b00001;
+                        a_post_attn_norm[N*i*BW_FP+:BW_FP]  = {8'd7,psum_norm[i][BW_FP-1:BW_MAN],1'b0} ;
+                        c_post_attn_norm[N*i*BW_FP+:BW_FP]  = psum_norm[i][BW_MAN] ? 
+                                                            ((psum_norm[i][BW_MAN-1:0] == 9'b010000000) ? 17'h008f0 : 17'h00a88)
+                                                            :17'h00a80 ; //7.5/8.5/8
                     end
-                    mode_post_attn_norm[0+:5]   = 5'b00001;
-                    a_post_attn_norm[0+:BW_FP]  = {8'd7,psum_norm[0][BW_FP-1:BW_MAN],1'b0} ;
-                    c_post_attn_norm[0+:BW_FP]  = psum_norm[0][BW_MAN] ? 17'h008f0 : 17'h00a88 ; //7.5/8.5
                 end
-
-                {5'd2}:begin  
-                    if(state_select) begin
-                        for(i=1;i<M;i=i+1) begin
-                            mode_post_attn_norm[N*i*5+:5]       = 5'b00100; 
-                            a_post_attn_norm[N*i*BW_FP+:BW_FP]  = psum_norm[i][BW_MAN] ?  17'h0076a : 17'h006a5 ;
-                            b_post_attn_norm[N*i*BW_FP+:BW_FP]  = {8'd0,psum_norm[i][BW_MAN-1:0]}        ;
-                            c_post_attn_norm[N*i*BW_FP+:BW_FP]  = psum_norm[i][BW_MAN] ?  17'h0072c : 17'h006b5 ; 
-                        end
+                {5'd1}:begin
+                    for(i=0;i<M;i=i+1) begin
+                        mode_post_attn_norm[N*i*5+:5]       = 5'b00100; 
+                        a_post_attn_norm[N*i*BW_FP+:BW_FP]  = psum_norm[i][BW_MAN] ?  17'h0076a : 17'h006a5 ;
+                        b_post_attn_norm[N*i*BW_FP+:BW_FP]  = {8'd0,psum_norm[i][BW_MAN-1:0]};
+                        c_post_attn_norm[N*i*BW_FP+:BW_FP]  = psum_norm[i][BW_MAN] ?  17'h0072c : 17'h006b5 ; 
                     end
-                    mode_post_attn_norm[0+:5]   = 5'b00100; 
-                    a_post_attn_norm[0+:BW_FP]  = psum_norm[0][BW_MAN] ?  17'h0076a : 17'h006a5 ;
-                    b_post_attn_norm[0+:BW_FP]  = {8'd0,psum_norm[0][BW_MAN-1:0]}        ;
-                    c_post_attn_norm[0+:BW_FP]  = psum_norm[0][BW_MAN] ?  17'h0072c : 17'h006b5 ; 
-
                 end
                 default: begin
                     a_post_attn_norm = 'b0;
@@ -275,7 +268,6 @@ module post_attn_norm_ctrl#(
                     c_post_attn_norm = 'b0;
                     mode_post_attn_norm = 'b0;
                 end
-
             endcase
         end
         else begin
@@ -293,16 +285,17 @@ module post_attn_norm_ctrl#(
             buffer_norm_out <= 'b0 ;
             scaled_x_valid  <= 1'b0 ;
             rms_result_valid    <= 1'b0 ;
+            rms_result_output_flag <= 1'b0 ;
             for(i=0;i<M;i=i+1) begin
                 psum_norm[i]    <= 'b0;
                 alpha[i]        <= 'b0;
+                alpha_exp[i]    <= 'b0;
             end 
         end
-
         else if({busy1,cnt} == {1'b1,5'd2} ) begin
             residual_out <= FMA_out ;
         end
-        else if({busy1,cnt} == {1'b1,5'd5}) begin   // 分子乘权重
+        else if({busy1,cnt} == {1'b1,5'd5}) begin   // 输出分子乘权重
             buffer_norm_out[VALUE_MN*2*BW_FP -1:VALUE_MN*BW_FP] <= FMA_out;
             scaled_x_valid <= 1'b1 ;
         end
@@ -320,29 +313,34 @@ module post_attn_norm_ctrl#(
             if(!state_select) begin
                 psum_norm[0] <= FMA_out[63*BW_FP+:BW_FP] ;
             end
-        end 
-
-
-
-        else if({busy1,cnt} == {1'b1,5'd17} ) begin
-            buffer_norm_out <= FMA_out;
-            rms_result_valid <= 1'b1 ;
         end
-        else if({busy1,cnt} == {1'b1,5'd18} ) begin
+        else if({busy1,cnt} == {1'b1,5'd19} ) begin
+            if(!rms_result_output_flag) begin
+                buffer_norm_out[VALUE_MN*BW_FP -1:0] <= FMA_out;
+                rms_result_output_flag <= 1'b1 ;
+            end
+            else begin
+                buffer_norm_out[VALUE_MN*2*BW_FP -1:VALUE_MN*BW_FP] <= FMA_out;
+                rms_result_valid <= 1'b1 ;
+                rms_result_output_flag <= 1'b0 ;
+            end
+        end
+        else if({busy1,cnt} == {1'b1,5'd20} ) begin
             rms_result_valid <= 1'b0 ;
         end
 
         else if({busy2,cnt} == {1'b1,5'd2} ) begin 
             for(i=0;i<8;i=i+1) begin
                 psum_norm[i] <= 'b0 ;
+                alpha_exp[i] <= int_part[N*i*BW_MAN +:(BW_MAN-1)];
             end 
         end         
 
-        else if({busy2,cnt} == {1'b1,5'd4} ) begin 
+        else if({busy2,cnt} == {1'b1,5'd3} ) begin 
             for(i=0;i<M;i=i+1) begin
-                alpha[i] <=  FMA_out[N*i*BW_FP+:BW_FP];
+                alpha[i] <=  {alpha_exp[i],FMA_out[N*i*BW_FP+:BW_MAN]};
             end 
-        end  
+        end
     end
 
 endmodule

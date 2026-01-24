@@ -78,6 +78,7 @@ module fma_top#(
         .Z0                             (Z0                  ),
         .W_post_attn_norm               (W_post_attn_norm    ),
         .FMA_out                        (FMA_out[0+:VALUE_MN*BW_FP]) ,
+        .int_part                       (int_part[0+:VALUE_MN*BW_MAN]) ,
 
         //output
         .busy                           (busy_post_attn_norm),

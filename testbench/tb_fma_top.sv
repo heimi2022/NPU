@@ -77,6 +77,8 @@ module tb_fma_top;
     reg                             post_attn_norm_ready                ;
     reg     [BW_FP - 1:0]           scaled_x                [0:16383]   ; // 8 * 2048 = 16384
 
+    real                            post_attn_norm_result   [0:131071]  ; // 8 * 2048 = 16384
+
     reg     [3:0]                   post_attn_norm_seq_cnt              ; // seq 计数器  +1 表示 进8
 
 // FSM
@@ -161,7 +163,7 @@ module tb_fma_top;
     real        l0_input_dec                [0:131071]  ;   // 64*2048=131072
     real        l0_O_proj_dec               [0:131071]  ;
     real        attn_residual_result_dec    [0:131071]  ; 
-    real        post_attn_norm_result_dec   [0:131071]  ;
+    real        post_attn_norm_result_golden   [0:131071]  ;
     real        post_attn_norm_weight_dec   [0:2047]    ; 
 
     // $readmemb :loads a text file with binary values into a memory array
@@ -204,7 +206,7 @@ module tb_fma_top;
             l0_input_dec[i]              = std_bf16_to_dec(l0_input_raw[i]);
             l0_O_proj_dec[i]             = std_bf16_to_dec(l0_O_proj_raw[i]);
             attn_residual_result_dec[i]  = std_bf16_to_dec(attn_residual_result_raw[i]);
-            post_attn_norm_result_dec[i] = std_bf16_to_dec(post_attn_norm_result_raw[i]);
+            post_attn_norm_result_golden[i] = std_bf16_to_dec(post_attn_norm_result_raw[i]);
         end
 
         for (i = 0; i < 2048; i = i + 1) begin
@@ -261,15 +263,33 @@ module tb_fma_top;
         else if (scaled_x_valid) begin
             for (i = 0; i < M; i = i + 1) begin
                 for (j = 0; j < N; j = j + 1) begin
-                    scaled_x[HIDDEN_SIZE*(i + post_attn_norm_seq_cnt * 8) + j + post_attn_norm_hidden_size_cnt*N] <= buffer_post_attn_norm_out[N*(i+M)*BW_FP + j*BW_FP +: BW_FP] ;
+                    scaled_x[HIDDEN_SIZE*i + j + post_attn_norm_hidden_size_cnt*N] <= buffer_post_attn_norm_out[N*(i+M)*BW_FP + j*BW_FP +: BW_FP] ;
+                end
+            end
+            if(post_attn_norm_seq_cnt == 1'd0 && post_attn_norm_hidden_size_cnt == 1'd1) begin
+                for(i = 0; i < M; i = i + 1) begin
+                    for (j = 0; j < N; j = j + 1) begin
+                        $display("scaled_x[%0d]: %h", HIDDEN_SIZE*i + j + (post_attn_norm_hidden_size_cnt-1)*N, scaled_x[HIDDEN_SIZE*i + j + (post_attn_norm_hidden_size_cnt-1)*N]);
+                    end
                 end
             end
         end
     end
 
-    // always @(posedge clk or negedge rst_n) begin
-    //     if()
-    // end
+    // 模拟sram 存储 rms 结果
+    always @(posedge clk or negedge rst_n) begin
+        if (rms_result_valid) begin
+            if(post_attn_norm_seq_cnt == 1'd1 && post_attn_norm_hidden_size_cnt == 1'd1) begin
+                for (i = 0; i < M; i = i + 1) begin
+                    for (j = 0; j < N; j = j + 1) begin
+                        post_attn_norm_result[HIDDEN_SIZE*i + j + (post_attn_norm_hidden_size_cnt-1'd1)*N] = bf16_to_dec(buffer_post_attn_norm_out[N*i*BW_FP + j*BW_FP +: BW_FP]) ;
+                        $display("post_attn_norm_result_golden[%0d]: %f", HIDDEN_SIZE*i + j + (post_attn_norm_hidden_size_cnt-1'd1)*N, post_attn_norm_result_golden[HIDDEN_SIZE*i + j + (post_attn_norm_hidden_size_cnt-1'd1)*N]);
+                        $display("post_attn_norm_result[%0d]: %f", HIDDEN_SIZE*i + j + (post_attn_norm_hidden_size_cnt-1'd1)*N, post_attn_norm_result[HIDDEN_SIZE*i + j + (post_attn_norm_hidden_size_cnt-1'd1)*N]);
+                    end
+                end
+            end
+        end
+    end
 
 /******************** FSM ****************************/ 
 
@@ -384,8 +404,8 @@ module tb_fma_top;
                     for(i = 0; i < M ; i = i + 1) begin
                         for(j = 0; j < N; j = j + 1) begin
                             q_FMA_dec[HEAD_DIM*i + j + rope_head_dim_cnt*N] = bf16_to_dec(buffer_RoPE[N*i*BW_FP + j*BW_FP +: BW_FP]);
-                            //$display("q_FMA_dec[%0d]: %f", HEAD_DIM*i + j + rope_head_dim_cnt*N, q_FMA_dec[HEAD_DIM*i + j + rope_head_dim_cnt*N]);
-                            //$display("q_rope_dec[%0d]: %f", HEAD_DIM*i + j + rope_head_dim_cnt*N, q_rope_dec[HEAD_DIM*i + j + rope_head_dim_cnt*N]);
+                            $display("q_FMA_dec[%0d]: %f", HEAD_DIM*i + j + rope_head_dim_cnt*N, q_FMA_dec[HEAD_DIM*i + j + rope_head_dim_cnt*N]);
+                            $display("q_rope_dec[%0d]: %f", HEAD_DIM*i + j + rope_head_dim_cnt*N, q_rope_dec[HEAD_DIM*i + j + rope_head_dim_cnt*N]);
                             q_FMA_dec[HEAD_DIM*i + j + rope_head_dim_cnt*N + 4* N] = bf16_to_dec(buffer_RoPE[N*(i+M)*BW_FP + j*BW_FP +: BW_FP]);
                         end
                     end
@@ -440,11 +460,24 @@ module tb_fma_top;
                             for(j = 0; j < N; j = j + 1) begin
                                 O_proj[N*i*BW_FP + j*BW_FP +: BW_FP] <= l0_O_proj[HIDDEN_SIZE*(i + post_attn_norm_seq_cnt * 8) + j + post_attn_norm_hidden_size_cnt*N];
                                 Z0[N*i*BW_FP + j*BW_FP +: BW_FP] <= l0_input[HIDDEN_SIZE*(i + post_attn_norm_seq_cnt * 8) + j + post_attn_norm_hidden_size_cnt*N];
-                                buffer_post_attn_norm_in[N*i*BW_FP + j*BW_FP +: BW_FP] <= scaled_x[HIDDEN_SIZE*(i + post_attn_norm_seq_cnt * 8) + j + post_attn_norm_hidden_size_cnt*N];
                             end
                         end
                         for(j = 0; j < N; j = j + 1) begin
                             W_post_attn_norm[j*BW_FP +: BW_FP] <= post_attn_norm_weight[j + post_attn_norm_hidden_size_cnt*N];
+                        end
+                        if(post_attn_norm_seq_cnt == 8'd0) begin
+                            for(i = 0; i < M ; i = i + 1) begin
+                                for(j = 0; j < N; j = j + 1) begin
+                                    buffer_post_attn_norm_in[N*i*BW_FP + j*BW_FP +: BW_FP] <= 1'b0;
+                                end
+                            end
+                        end
+                        else begin
+                            for(i = 0; i < M ; i = i + 1) begin
+                                for(j = 0; j < N; j = j + 1) begin
+                                    buffer_post_attn_norm_in[N*i*BW_FP + j*BW_FP +: BW_FP] <= scaled_x[HIDDEN_SIZE*i+ j + post_attn_norm_hidden_size_cnt*N];
+                                end
+                            end
                         end
                     end
                     else if(busy_post_attn_norm_fall) begin
@@ -458,11 +491,39 @@ module tb_fma_top;
                         start_residual <= 1'b0;
                     end
                 end
+                POST_ATTN_NORM_SQRT: begin
+                    if(!post_attn_norm_ready) begin
+                        start_post_attn_norm_sqrt <= 1'b1;
+                        post_attn_norm_ready <= 1'b1;
+                    end
+                    else if(busy_post_attn_norm_fall) begin
+                        post_attn_norm_ready <= 1'd0;
+                    end
+                    else begin
+                        start_post_attn_norm_sqrt <= 1'b0;
+                    end
+                end
                 default : begin
 
                 end
             endcase
         end
+    end
+
+/******************** test ****************************/ 
+    reg [16:0] dec_to_bf16_test;
+    real test_value_1;
+    real test_value_2;
+    real test_value_3;
+    initial begin
+        // dec_to_bf16_test = dec_to_bf16(5);
+        // $display("dec_to_bf16_test: %b", dec_to_bf16_test);
+        test_value_1 = bf16_to_dec(17'h1f769);
+        $display("test_value1: %f", test_value_1);
+        test_value_2 = bf16_to_dec(17'h1f483);
+        $display("test_value2: %f", test_value_2);
+        test_value_3 = ffp_to_dec(29'hfe75500);
+        $display("test_value3: %f", test_value_3);
     end
 
 /******************** initial ****************************/ 
@@ -654,4 +715,43 @@ module tb_fma_top;
   endfunction
 
 
+  function real ffp_to_dec;
+      input [28:0] bf16_val;
+      reg sign;
+      real exp_val,exp_abs;
+      reg [17:0] man_val;
+      real fraction, result;
+      begin
+          // Extract components
+          if (bf16_val[28]) begin
+              // Negative: convert from two's complement
+              exp_abs = $itor((~bf16_val[28:19] + 1) & 10'h1FF) ;
+              exp_val = -exp_abs ;
+          end else begin
+              // Positive
+              exp_abs = $itor(bf16_val[28:19]) ;
+              exp_val = exp_abs ;
+          end
+                  
+          man_val = bf16_val[17:0];
+          sign = bf16_val[18]; 
+
+          // Handle zero
+          if (bf16_val == 0) begin
+              ffp_to_dec = 0.0;
+              return;
+          end
+  
+          if (sign) begin
+              // Negative: convert from two's complement
+              fraction = $itor((~{sign, man_val} + 1) & 19'h7FFFF) / (2**19);
+          end else begin
+              // Positive
+              fraction = $itor(man_val) / (2**19);
+          end
+
+          result = (/*1.0 +*/ fraction) * (2.0 ** exp_val);
+          ffp_to_dec = sign ? -result : result;
+      end
+  endfunction
 endmodule
