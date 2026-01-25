@@ -266,13 +266,6 @@ module tb_fma_top;
                     scaled_x[HIDDEN_SIZE*i + j + post_attn_norm_hidden_size_cnt*N] <= buffer_post_attn_norm_out[N*(i+M)*BW_FP + j*BW_FP +: BW_FP] ;
                 end
             end
-            if(post_attn_norm_seq_cnt == 1'd0 && post_attn_norm_hidden_size_cnt == 1'd1) begin
-                for(i = 0; i < M; i = i + 1) begin
-                    for (j = 0; j < N; j = j + 1) begin
-                        $display("scaled_x[%0d]: %h", HIDDEN_SIZE*i + j + (post_attn_norm_hidden_size_cnt-1)*N, scaled_x[HIDDEN_SIZE*i + j + (post_attn_norm_hidden_size_cnt-1)*N]);
-                    end
-                end
-            end
         end
     end
 

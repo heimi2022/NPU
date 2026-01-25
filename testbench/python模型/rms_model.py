@@ -151,7 +151,7 @@ def rms_norm_exact(bin_e, bin_m):
 if __name__ == "__main__":
 
     # Case 1: 你可以修改这里的字符串
-    e_str = "00001011"  # e = 11
-    m_str = "010000000"  # m = 128 -> 128/512 = 0.5
+    e_str = "00000001"  # e = 11
+    m_str = "010110010"  # m = 128 -> 128/512 = 0.5
 
     rms_norm_exact(e_str, m_str)

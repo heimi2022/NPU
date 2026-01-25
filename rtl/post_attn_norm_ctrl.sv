@@ -250,16 +250,24 @@ module post_attn_norm_ctrl#(
                         mode_post_attn_norm[N*i*5+:5]       = 5'b00001;
                         a_post_attn_norm[N*i*BW_FP+:BW_FP]  = {8'd7,psum_norm[i][BW_FP-1:BW_MAN],1'b0} ;
                         c_post_attn_norm[N*i*BW_FP+:BW_FP]  = psum_norm[i][BW_MAN] ? 
-                                                            ((psum_norm[i][BW_MAN-1:0] == 9'b010000000) ? 17'h008f0 : 17'h00a88)
+                                                            ((psum_norm[i][BW_MAN-1:0] == 9'b010000000) ? 17'h00a88 :17'h008f0)
                                                             :17'h00a80 ; //7.5/8.5/8
                     end
                 end
                 {5'd1}:begin
                     for(i=0;i<M;i=i+1) begin
                         mode_post_attn_norm[N*i*5+:5]       = 5'b00100; 
-                        a_post_attn_norm[N*i*BW_FP+:BW_FP]  = psum_norm[i][BW_MAN] ?  17'h0076a : 17'h006a5 ;
+                        a_post_attn_norm[N*i*BW_FP+:BW_FP]  = psum_norm[i][BW_MAN] ? 
+                                                              {(psum_norm[i][BW_MAN-1:0] == 9'b010000000) ? 17'h00480 : 
+                                                               (psum_norm[i][BW_MAN-1:0] < 9'h0b4) ? 17'h0073c : 17'h00518 }
+                                                              : {(psum_norm[i][BW_MAN-1:0] < 9'h0b4) ? 17'h00976 : 17'h0075c} ;
+
                         b_post_attn_norm[N*i*BW_FP+:BW_FP]  = {8'd0,psum_norm[i][BW_MAN-1:0]};
-                        c_post_attn_norm[N*i*BW_FP+:BW_FP]  = psum_norm[i][BW_MAN] ?  17'h0072c : 17'h006b5 ; 
+
+                        c_post_attn_norm[N*i*BW_FP+:BW_FP]  = psum_norm[i][BW_MAN] ? 
+                                                              {(psum_norm[i][BW_MAN-1:0] == 9'b010000000) ? 17'd0 :
+                                                               (psum_norm[i][BW_MAN-1:0] < 9'h0b4) ? 17'h006b0 : 17'h00694 }
+                                                              : {(psum_norm[i][BW_MAN-1:0] < 9'h0b4) ? 17'h006f8 : 17'h06d1} ;
                     end
                 end
                 default: begin
