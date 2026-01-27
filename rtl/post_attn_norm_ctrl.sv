@@ -9,7 +9,7 @@ module post_attn_norm_ctrl#(
     input                               clk                         ,
     input                               rst_n                       ,
     input                               state_select                , //0:decode 1:prefill
-    input                               start_residual              , //pulse
+    input                               start_post_attn_norm_residual, //pulse
     input                               start_post_attn_norm_sqrt   ,
 
     input       [VALUE_MN*BW_FP -1:0]   O_proj                      , //8*8 or 1*64
@@ -56,7 +56,7 @@ module post_attn_norm_ctrl#(
             busy2 <= 'b0;
         end 
         else begin
-            if(start_residual) begin
+            if(start_post_attn_norm_residual) begin
                 busy1 <= 1'b1;
                 cnt   <=  'b0;
             end 

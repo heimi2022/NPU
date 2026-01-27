@@ -20,7 +20,7 @@ module tb_fma_top;
     reg                             clk                                 ;
     reg                             rst_n                               ;
     reg                             state_select                        ; //0:decode 1:prefill
-    reg                             start_residual                      ; //pulse,from PE
+    reg                             start_post_attn_norm_residual       ; //pulse,from PE
     reg                             start_post_attn_norm_sqrt           ; //pulse,from PE
     reg                             start1_norm1                        ;
     reg                             start1_sum_norm1                    ;
@@ -44,10 +44,18 @@ module tb_fma_top;
     wire                            busy_RoPE                           ;
     wire                            busy_post_attn_norm                 ;
 
+    reg                                   start_ffn_residual              ;   // ffn_residual 
+    reg       [VALUE_MN*BW_FP -1:0]       D_proj                          ;   // ffn_residual 
+    reg       [VALUE_MN*BW_FP -1:0]       attn_residual_out               ;   // ffn_residual
+    wire                                  busy_ffn_residual               ;   // ffn_residual
+    wire      [VALUE_MN*BW_FP -1:0]       ffn_residual_out                ;   // ffn_residual
+    wire                                  ffn_residual_out_valid          ;   // ffn_residual    
+
 // general tb signals
     integer                         i,j                                 ;
     reg                             rope_start                          ;
     reg                             post_attn_norm_start                ;
+    reg                             ffn_residual_start                  ;
     reg     [6:0]                   seq_len                             ;
 
 // rope
@@ -76,23 +84,44 @@ module tb_fma_top;
     reg     [7:0]                   post_attn_norm_hidden_size_cnt      ;
     reg                             post_attn_norm_ready                ;
     reg     [BW_FP - 1:0]           scaled_x                [0:16383]   ; // 8 * 2048 = 16384
-
-    real                            post_attn_norm_result   [0:131071]  ; // 8 * 2048 = 16384
-
     reg     [3:0]                   post_attn_norm_seq_cnt              ; // seq 计数器  +1 表示 进8
+    reg                             post_attn_norm_decode_flag          ;
+
+    real                            post_attn_norm_result   [0:131071]  ; 
+
+    real abs_error[0:63] ;
+    real relative_error[0:63] ;
+    real abs_error_temp;
+    real relative_error_temp;
+
+// ffn
+// residual
+    reg     [BW_FP - 1:0]           attn_residual_result        [0:131071]; 
+    reg     [BW_FP - 1:0]           down_proj                   [0:131071];
+
+    reg                             busy_ffn_residual_r                 ;
+    wire                            busy_ffn_residual_fall              ;
+
+    reg                             ffn_residual_ready                  ;
+    reg     [7:0]                   ffn_residual_hidden_size_cnt        ;
+    real                            ffn_residual_result   [0:131071]    ; // 8 * 2048 = 16384
 
 // FSM
     reg     [4:0]                   state, next_state                   ;
     // state
     localparam [4:0] 
-        IDLE                        =   5'd0    ,
-        ROPE_STAGE1                 =   5'd1    ,
-        ROPE_STAGE2                 =   5'd2    ,
-        ROPE_RESULT_SAVE            =   5'd3    ,
-        POST_ATTN_NORM_RESIDUAL     =   5'd4    ,
-        POST_ATTN_NORM_SQRT         =   5'd5    ,
-        POST_ATTN_NORM_RESULT_SAVE  =   5'd6    ,
-        STOP                        =   5'd31   ;
+        IDLE                            =   5'd0    ,
+        ROPE_STAGE1                     =   5'd1    ,
+        ROPE_STAGE2                     =   5'd2    ,
+        ROPE_RESULT_SAVE                =   5'd3    ,
+        POST_ATTN_NORM_RESIDUAL_PREFILL =   5'd4    ,
+        POST_ATTN_NORM_SQRT             =   5'd5    ,
+        POST_ATTN_NORM_PREFILL2DECODE   =   5'd6    ,
+        POST_ATTN_NORM_RESIDUAL_DECODE  =   5'd7    ,
+        POST_ATTN_NORM_RESULT_CHECK     =   5'd8    ,
+        FFN_RESIDUAL                    =   5'd9    ,
+        FFN_RESIDUAL_CHECK              =   5'd10   ,
+        STOP                            =   5'd31   ;
 
 /******************** inst_fma_top *********************************/ 
     fma_top #(
@@ -106,32 +135,38 @@ module tb_fma_top;
         .N       (N       ),
         .K       (K       )
     )inst_fma_top(
-        .clk                        (clk                        ),
-        .rst_n                      (rst_n                      ),
-        .state_select               (state_select               ), // post_attn_norm:0:decode 1:prefill
-        .start_residual             (start_residual             ), // post_attn_norm:pulse,from PE
-        .start_post_attn_norm_sqrt  (start_post_attn_norm_sqrt  ), // post_attn_norm:pulse,from PE
-        .start1_norm1               (start1_norm1               ),
-        .start1_sum_norm1           (start1_sum_norm1           ),
-        .start2_norm1               (start2_norm1               ),
-        .start1_RoPE                (start1_RoPE                ),  // rope input
-        .start2_RoPE                (start2_RoPE                ),  // rope input
-        .O_proj                     (O_proj                     ),  // post_attn_norm input
-        .Z0                         (Z0                         ),  // post_attn_norm input
-        .W_post_attn_norm           (W_post_attn_norm           ),  // post_attn_norm input
-        .Input_norm1                (Input_norm1                ),
-        .W_norm1                    (W_norm1                    ),
-        .QK_proj                    (QK_proj                    ),  // rope input
-        .W_cos                      (W_cos                      ),  // rope input 
-        .W_sin                      (W_sin                      ),  // rope input
-        .buffer_post_attn_norm_in   (buffer_post_attn_norm_in   ),  // post_attn_norm sram 
-        .buffer_norm1_out           (buffer_norm1_out           ),
-        .buffer_post_attn_norm_out  (buffer_post_attn_norm_out  ),  // post_attn_norm sram
-        .rms_result_valid           (rms_result_valid           ),
-        .scaled_x_valid             (scaled_x_valid             ),
-        .buffer_RoPE                (buffer_RoPE                ),  // rope output
-        .busy_RoPE                  (busy_RoPE                  ),  // rope busy
-        .busy_post_attn_norm        (busy_post_attn_norm        )   // post_attn_norm busy    
+        .clk                          (clk                          ),
+        .rst_n                        (rst_n                        ),
+        .state_select                 (state_select                 ),   //0:decode 1:prefill
+        .start_post_attn_norm_residual(start_post_attn_norm_residual),   // post_attn_norm
+        .start_post_attn_norm_sqrt    (start_post_attn_norm_sqrt    ),   // post_attn_norm
+        .O_proj                       (O_proj                       ),   // post_attn_norm
+        .Z0                           (Z0                           ),   // post_attn_norm
+        .W_post_attn_norm             (W_post_attn_norm             ),   // post_attn_norm
+        .buffer_post_attn_norm_in     (buffer_post_attn_norm_in     ),   // post_attn_norm
+        .buffer_post_attn_norm_out    (buffer_post_attn_norm_out    ),   // post_attn_norm 
+        .rms_result_valid             (rms_result_valid             ),   // post_attn_norm
+        .scaled_x_valid               (scaled_x_valid               ),   // post_attn_norm
+        .busy_post_attn_norm          (busy_post_attn_norm          ),   // post_attn_norm   
+        .start1_norm1                 (start1_norm1                 ),
+        .start1_sum_norm1             (start1_sum_norm1             ),
+        .start2_norm1                 (start2_norm1                 ),
+        .start1_RoPE                  (start1_RoPE                  ),   // RoPE
+        .start2_RoPE                  (start2_RoPE                  ),   // RoPE
+        .QK_proj                      (QK_proj                      ),   // RoPE 
+        .W_cos                        (W_cos                        ),   // RoPE 
+        .W_sin                        (W_sin                        ),   // RoPE 
+        .buffer_RoPE                  (buffer_RoPE                  ),   // RoPE
+        .busy_RoPE                    (busy_RoPE                    ),   // RoPE
+        .Input_norm1                  (Input_norm1                  ),
+        .W_norm1                      (W_norm1                      ),  
+        .buffer_norm1_out             (buffer_norm1_out             ),
+        .start_ffn_residual           (start_ffn_residual           ),   // ffn_residual 
+        .D_proj                       (D_proj                       ),   // ffn_residual 
+        .attn_residual_out            (attn_residual_out            ),   // ffn_residual
+        .busy_ffn_residual            (busy_ffn_residual            ),   // ffn_residual
+        .ffn_residual_out             (ffn_residual_out             ),   // ffn_residual
+        .ffn_residual_out_valid       (ffn_residual_out_valid       )    // ffn_residual    
     );
 
 /********************read and convert data*********************************/ 
@@ -160,11 +195,18 @@ module tb_fma_top;
     reg [15:0]  post_attn_norm_weight_raw   [0:2047]    ; 
 
     // std BF16 to Real storage
-    real        l0_input_dec                [0:131071]  ;   // 64*2048=131072
-    real        l0_O_proj_dec               [0:131071]  ;
-    real        attn_residual_result_dec    [0:131071]  ; 
-    real        post_attn_norm_result_golden   [0:131071]  ;
-    real        post_attn_norm_weight_dec   [0:2047]    ; 
+    real        l0_input_dec                    [0:131071]  ;   // 64*2048=131072
+    real        l0_O_proj_dec                   [0:131071]  ;
+    real        attn_residual_result_dec        [0:131071]  ; 
+    real        post_attn_norm_result_golden    [0:131071]  ;
+    real        post_attn_norm_weight_dec       [0:2047]    ; 
+
+    // ffn
+    reg [15:0]  down_proj_raw                   [0:131071]  ;   // 64*2048=131072
+    reg [15:0]  ffn_residual_result_raw         [0:131071]  ;
+
+    real        down_proj_dec                   [0:131071]  ;
+    real        ffn_residual_result_golden      [0:131071]  ;
 
     // $readmemb :loads a text file with binary values into a memory array
     initial begin
@@ -175,8 +217,20 @@ module tb_fma_top;
         $readmemb("./rope_data/q_origin.txt", q_origin_raw);
         $readmemb("./rope_data/k_rope.txt", k_rope_raw);
         $readmemb("./rope_data/q_rope.txt", q_rope_raw);
+    
+    // post_attn_norm
+        $readmemb("./layernorm_data/layer0_input_bf16.txt", l0_input_raw );
+        $readmemb("./layernorm_data/layer0_attn_result_bf16.txt", l0_O_proj_raw );
+        $readmemb("./layernorm_data/layer0_attn_residual_result_bf16.txt", attn_residual_result_raw);
+        $readmemb("./layernorm_data/layer0_post_attention_layernorm_result_bf16.txt", post_attn_norm_result_raw );
+        $readmemb("./layernorm_data/layer0_post_attention_layernorm_weight_bf16.txt", post_attn_norm_weight_raw );
 
-        // Convert std BF16 to Real
+    // ffn
+        $readmemb("./ffn_data/down_proj_bf16.txt",down_proj_raw);
+        $readmemb("./ffn_data/ffn_residual_result_bf16.txt",ffn_residual_result_raw);
+
+
+    // Convert std BF16 to Real
         for (i = 0; i < 4096; i = i + 1) begin
             sin_dec[i]      = std_bf16_to_dec(sin_raw[i]);
             cos_dec[i]      = std_bf16_to_dec(cos_raw[i]);
@@ -184,6 +238,19 @@ module tb_fma_top;
             q_origin_dec[i] = std_bf16_to_dec(q_origin_raw[i]);
             k_rope_dec[i]   = std_bf16_to_dec(k_rope_raw[i]);
             q_rope_dec[i]   = std_bf16_to_dec(q_rope_raw[i]);
+        end
+
+        for (i = 0; i < 131072; i = i + 1) begin
+            l0_input_dec[i]                 = std_bf16_to_dec(l0_input_raw[i]);
+            l0_O_proj_dec[i]                = std_bf16_to_dec(l0_O_proj_raw[i]);
+            attn_residual_result_dec[i]     = std_bf16_to_dec(attn_residual_result_raw[i]);
+            post_attn_norm_result_golden[i] = std_bf16_to_dec(post_attn_norm_result_raw[i]);
+            down_proj_dec[i]                = std_bf16_to_dec(down_proj_raw[i]);
+            ffn_residual_result_golden[i]   = std_bf16_to_dec(ffn_residual_result_raw[i]);
+        end
+
+        for (i = 0; i < 2048; i = i + 1) begin
+            post_attn_norm_weight_dec[i] = std_bf16_to_dec(post_attn_norm_weight_raw[i]);
         end
 
         // Convert dec to BF16
@@ -194,29 +261,11 @@ module tb_fma_top;
             q_origin[i] = dec_to_bf16(q_origin_dec[i]);
         end
 
-    // post_attn_norm
-        $readmemb("./layernorm_data/layer0_input_bf16.txt", l0_input_raw );
-        $readmemb("./layernorm_data/layer0_attn_result_bf16.txt", l0_O_proj_raw );
-        $readmemb("./layernorm_data/layer0_attn_residual_result_bf16.txt", attn_residual_result_raw);
-        $readmemb("./layernorm_data/layer0_post_attention_layernorm_result_bf16.txt", post_attn_norm_result_raw );
-        $readmemb("./layernorm_data/layer0_post_attention_layernorm_weight_bf16.txt", post_attn_norm_weight_raw );
-
-        // Convert std BF16 to Real
         for (i = 0; i < 131072; i = i + 1) begin
-            l0_input_dec[i]              = std_bf16_to_dec(l0_input_raw[i]);
-            l0_O_proj_dec[i]             = std_bf16_to_dec(l0_O_proj_raw[i]);
-            attn_residual_result_dec[i]  = std_bf16_to_dec(attn_residual_result_raw[i]);
-            post_attn_norm_result_golden[i] = std_bf16_to_dec(post_attn_norm_result_raw[i]);
-        end
-
-        for (i = 0; i < 2048; i = i + 1) begin
-            post_attn_norm_weight_dec[i] = std_bf16_to_dec(post_attn_norm_weight_raw[i]);
-        end
-
-        // Convert dec to BF16
-        for (i = 0; i < 131072; i = i + 1) begin
-            l0_input[i]  = dec_to_bf16(l0_input_dec[i]);
-            l0_O_proj[i] = dec_to_bf16(l0_O_proj_dec[i]);
+            l0_input[i]             = dec_to_bf16(l0_input_dec[i]);
+            l0_O_proj[i]            = dec_to_bf16(l0_O_proj_dec[i]);
+            attn_residual_result[i] = dec_to_bf16(attn_residual_result_dec[i]);
+            down_proj[i]            = dec_to_bf16(down_proj_dec[i]);
         end
 
         for (i = 0; i < 2048; i = i + 1) begin
@@ -244,15 +293,6 @@ module tb_fma_top;
     end
     assign busy_post_attn_norm_fall = busy_post_attn_norm_r && !busy_post_attn_norm;
 
-
-    // TODO  
-    always @(posedge clk or negedge rst_n) begin
-        if(!rst_n)
-            state_select <= 1'b1;
-        else
-            state_select <= 1'b1;
-    end
-
     // 模拟sram 存储 rms 分子
     always @(posedge clk or negedge rst_n) begin
         if(!rst_n) begin
@@ -261,28 +301,67 @@ module tb_fma_top;
             end
         end
         else if (scaled_x_valid) begin
-            for (i = 0; i < M; i = i + 1) begin
-                for (j = 0; j < N; j = j + 1) begin
-                    scaled_x[HIDDEN_SIZE*i + j + post_attn_norm_hidden_size_cnt*N] <= buffer_post_attn_norm_out[N*(i+M)*BW_FP + j*BW_FP +: BW_FP] ;
+            if (state_select) begin
+                for (i = 0; i < M; i = i + 1) begin
+                    for (j = 0; j < N; j = j + 1) begin
+                        scaled_x[HIDDEN_SIZE*i + j + post_attn_norm_hidden_size_cnt*N] <= buffer_post_attn_norm_out[N*(i+M)*BW_FP + j*BW_FP +: BW_FP] ;
+                    end
                 end
+            end
+            else begin
+                if(!post_attn_norm_decode_flag) begin
+                    for (j = 0; j < 64; j = j + 1) begin
+                        scaled_x[j + post_attn_norm_hidden_size_cnt*64] <= buffer_post_attn_norm_out[(j+64)*BW_FP +: BW_FP] ;
+                    end
+                end 
             end
         end
     end
 
     // 模拟sram 存储 rms 结果
     always @(posedge clk or negedge rst_n) begin
-        if (rms_result_valid) begin
-            if(post_attn_norm_seq_cnt == 1'd1 && post_attn_norm_hidden_size_cnt == 1'd1) begin
+        if (state_select) begin
+            if (rms_result_valid & (post_attn_norm_seq_cnt > 0)) begin
                 for (i = 0; i < M; i = i + 1) begin
                     for (j = 0; j < N; j = j + 1) begin
-                        post_attn_norm_result[HIDDEN_SIZE*i + j + (post_attn_norm_hidden_size_cnt-1'd1)*N] = bf16_to_dec(buffer_post_attn_norm_out[N*i*BW_FP + j*BW_FP +: BW_FP]) ;
-                        $display("post_attn_norm_result_golden[%0d]: %f", HIDDEN_SIZE*i + j + (post_attn_norm_hidden_size_cnt-1'd1)*N, post_attn_norm_result_golden[HIDDEN_SIZE*i + j + (post_attn_norm_hidden_size_cnt-1'd1)*N]);
-                        $display("post_attn_norm_result[%0d]: %f", HIDDEN_SIZE*i + j + (post_attn_norm_hidden_size_cnt-1'd1)*N, post_attn_norm_result[HIDDEN_SIZE*i + j + (post_attn_norm_hidden_size_cnt-1'd1)*N]);
+                        post_attn_norm_result[HIDDEN_SIZE*(i + (post_attn_norm_seq_cnt-1) * 8) + j + (post_attn_norm_hidden_size_cnt-1'd1)*N] = bf16_to_dec(buffer_post_attn_norm_out[N*i*BW_FP + j*BW_FP +: BW_FP]);
+                        post_attn_norm_result[HIDDEN_SIZE*(i + (post_attn_norm_seq_cnt-1) * 8) + j + post_attn_norm_hidden_size_cnt*N] = bf16_to_dec(buffer_post_attn_norm_out[N*(i+M)*BW_FP + j*BW_FP +: BW_FP]);
                     end
                 end
             end
         end
+        else begin
+            if(rms_result_valid & post_attn_norm_decode_flag) begin
+                for (j = 0; j < 64; j = j + 1) begin
+                    post_attn_norm_result[HIDDEN_SIZE*seq_len + j + (post_attn_norm_hidden_size_cnt-1'd1)*64] = bf16_to_dec(buffer_post_attn_norm_out[j*BW_FP +: BW_FP]);
+                    post_attn_norm_result[HIDDEN_SIZE*seq_len + j + post_attn_norm_hidden_size_cnt*64] = bf16_to_dec(buffer_post_attn_norm_out[(j+64)*BW_FP +: BW_FP]);
+                end
+            end
+        end
     end
+
+/************************** ffn ****************************/ 
+    //ffn residual
+    // negedge edge detect
+    always @(posedge clk or negedge rst_n) begin
+        if(!rst_n) 
+            busy_ffn_residual_r <= 1'b0;
+        else 
+            busy_ffn_residual_r <= busy_ffn_residual;
+    end
+    assign busy_ffn_residual_fall = busy_ffn_residual_r && !busy_ffn_residual;
+
+    // 模拟sram 存储 rms 结果
+    always @(posedge clk or negedge rst_n) begin
+        if (ffn_residual_out_valid) begin
+            for (i = 0; i < M; i = i + 1) begin
+                for (j = 0; j < N; j = j + 1) begin
+                    ffn_residual_result[HIDDEN_SIZE*i + j + ffn_residual_hidden_size_cnt*N] = bf16_to_dec(ffn_residual_out[N*i*BW_FP + j*BW_FP +: BW_FP]);
+                end
+            end
+        end
+    end
+
 
 /******************** FSM ****************************/ 
 
@@ -301,7 +380,9 @@ module tb_fma_top;
                 if(rope_start)
                     next_state = ROPE_STAGE1;
                 else if(post_attn_norm_start)
-                    next_state = POST_ATTN_NORM_RESIDUAL;
+                    next_state = POST_ATTN_NORM_RESIDUAL_PREFILL;
+                else if(ffn_residual_start)
+                    next_state = FFN_RESIDUAL;
                 else
                     next_state = IDLE;
             end
@@ -311,20 +392,66 @@ module tb_fma_top;
                 next_state = busy_RoPE_fall ? ROPE_RESULT_SAVE : ROPE_STAGE2 ;
             ROPE_RESULT_SAVE:
                 next_state = STOP ;
-            POST_ATTN_NORM_RESIDUAL : begin  
+            POST_ATTN_NORM_RESIDUAL_PREFILL : begin  
                 if(busy_post_attn_norm_fall) begin
                     if(post_attn_norm_hidden_size_cnt == 8'd255)
                         next_state = POST_ATTN_NORM_SQRT ;
                     else
-                        next_state = POST_ATTN_NORM_RESIDUAL ;
+                        next_state = POST_ATTN_NORM_RESIDUAL_PREFILL ;
                 end
                 else
-                    next_state = POST_ATTN_NORM_RESIDUAL ;
+                    next_state = POST_ATTN_NORM_RESIDUAL_PREFILL ;
             end
-            POST_ATTN_NORM_SQRT :
-                next_state = busy_post_attn_norm_fall ? POST_ATTN_NORM_RESIDUAL : POST_ATTN_NORM_SQRT ;
-            POST_ATTN_NORM_RESULT_SAVE :
-                next_state = STOP ;
+            POST_ATTN_NORM_SQRT : begin
+                if(busy_post_attn_norm_fall) begin
+                    if(state_select) begin
+                        if(post_attn_norm_seq_cnt * 8 >= seq_len)
+                            next_state = POST_ATTN_NORM_PREFILL2DECODE ;
+                        else
+                            next_state = POST_ATTN_NORM_RESIDUAL_PREFILL ;
+                    end
+                    else
+                        next_state = POST_ATTN_NORM_RESIDUAL_DECODE ;
+                end
+                else
+                    next_state = POST_ATTN_NORM_SQRT;
+            end
+            POST_ATTN_NORM_PREFILL2DECODE : begin
+                if(busy_post_attn_norm_fall) begin
+                    if(post_attn_norm_hidden_size_cnt == 8'd255)
+                        next_state = POST_ATTN_NORM_RESIDUAL_DECODE ;
+                    else
+                        next_state = POST_ATTN_NORM_PREFILL2DECODE ;
+                end
+                else
+                    next_state = POST_ATTN_NORM_PREFILL2DECODE ;
+            end
+            POST_ATTN_NORM_RESIDUAL_DECODE : begin
+                if(busy_post_attn_norm_fall) begin
+                    if(post_attn_norm_hidden_size_cnt == 8'd31) begin
+                        if(!post_attn_norm_decode_flag)
+                            next_state = POST_ATTN_NORM_SQRT ;
+                        else
+                            next_state = POST_ATTN_NORM_RESULT_CHECK ;
+                    end
+                    else
+                        next_state = POST_ATTN_NORM_RESIDUAL_DECODE ;
+                end
+                else
+                    next_state = POST_ATTN_NORM_RESIDUAL_DECODE ;
+            end
+            POST_ATTN_NORM_RESULT_CHECK : next_state = STOP ;
+            FFN_RESIDUAL : begin
+                if(busy_ffn_residual_fall) begin
+                    if(ffn_residual_hidden_size_cnt == 8'd255)
+                        next_state = FFN_RESIDUAL_CHECK ;
+                    else
+                        next_state = FFN_RESIDUAL ;
+                end
+                else
+                    next_state = FFN_RESIDUAL ;
+            end
+            FFN_RESIDUAL_CHECK : next_state = STOP ;
             STOP:    next_state = IDLE;
             default: next_state = IDLE;
         endcase
@@ -422,8 +549,9 @@ module tb_fma_top;
     // post_attn_norm fsm control
     always @(posedge clk or negedge rst_n) begin
         if(!rst_n) begin
+            seq_len <= 7'd16;
             post_attn_norm_hidden_size_cnt <= 1'b0;
-            start_residual <= 1'b0;
+            start_post_attn_norm_residual <= 1'b0;
             start_post_attn_norm_sqrt <= 1'b0;
             post_attn_norm_ready <= 1'b0;
             O_proj <= 1'b0;
@@ -431,12 +559,15 @@ module tb_fma_top;
             buffer_post_attn_norm_in <= 1'b0;
             W_post_attn_norm <= 1'b0;
             post_attn_norm_seq_cnt <= 1'b0;
+            state_select <= 1'b1;
+            post_attn_norm_decode_flag <= 1'b0;
         end 
         else begin
             case(state)
                 IDLE: begin
+                    seq_len <= 7'd16;
                     post_attn_norm_hidden_size_cnt <= 1'b0;
-                    start_residual <= 1'b0;
+                    start_post_attn_norm_residual <= 1'b0;
                     start_post_attn_norm_sqrt <= 1'b0;
                     post_attn_norm_ready <= 1'b0;
                     O_proj <= 1'b0;
@@ -444,10 +575,12 @@ module tb_fma_top;
                     buffer_post_attn_norm_in <= 1'b0;
                     W_post_attn_norm <= 1'b0;
                     post_attn_norm_seq_cnt <= 1'b0;
+                    state_select <= 1'b1;
+                    post_attn_norm_decode_flag <= 1'b0;
                 end
-                POST_ATTN_NORM_RESIDUAL : begin
+                POST_ATTN_NORM_RESIDUAL_PREFILL : begin
                     if(!post_attn_norm_ready) begin
-                        start_residual <= 1'b1;
+                        start_post_attn_norm_residual <= 1'b1;
                         post_attn_norm_ready <= 1'b1;
                         for(i = 0; i < M ; i = i + 1) begin
                             for(j = 0; j < N; j = j + 1) begin
@@ -481,7 +614,7 @@ module tb_fma_top;
                         end
                     end
                     else begin
-                        start_residual <= 1'b0;
+                        start_post_attn_norm_residual <= 1'b0;
                     end
                 end
                 POST_ATTN_NORM_SQRT: begin
@@ -496,43 +629,191 @@ module tb_fma_top;
                         start_post_attn_norm_sqrt <= 1'b0;
                     end
                 end
+                POST_ATTN_NORM_PREFILL2DECODE : begin
+                    if(!post_attn_norm_ready) begin
+                        start_post_attn_norm_residual <= 1'b1;
+                        post_attn_norm_ready <= 1'b1;
+                        O_proj <= 1'd0;
+                        Z0 <= 1'd0;
+                        W_post_attn_norm <= 1'd0;
+                        for(i = 0; i < M ; i = i + 1) begin
+                            for(j = 0; j < N; j = j + 1) begin
+                                buffer_post_attn_norm_in[N*i*BW_FP + j*BW_FP +: BW_FP] <= scaled_x[HIDDEN_SIZE*i+ j + post_attn_norm_hidden_size_cnt*N];
+                            end
+                        end
+                    end
+                    else if(busy_post_attn_norm_fall) begin
+                        post_attn_norm_ready <= 1'd0;
+                        post_attn_norm_hidden_size_cnt <= post_attn_norm_hidden_size_cnt + 1'd1;
+                        if(post_attn_norm_hidden_size_cnt == 8'd255) begin
+                            state_select <= 1'd0;
+                        end
+                    end
+                    else begin
+                        start_post_attn_norm_residual <= 1'b0;
+                    end
+                end
+                POST_ATTN_NORM_RESIDUAL_DECODE : begin
+                    if(!post_attn_norm_ready) begin
+                        start_post_attn_norm_residual <= 1'b1;
+                        post_attn_norm_ready <= 1'b1;
+                        if (!post_attn_norm_decode_flag) begin
+                            for(j = 0; j < 64; j = j + 1) begin
+                                O_proj[j*BW_FP +: BW_FP] <= l0_O_proj[HIDDEN_SIZE*seq_len + j + post_attn_norm_hidden_size_cnt*64];
+                                Z0[j*BW_FP +: BW_FP] <= l0_input[HIDDEN_SIZE*seq_len+ j + post_attn_norm_hidden_size_cnt*64];
+                                W_post_attn_norm[j*BW_FP +: BW_FP] <= post_attn_norm_weight[j + post_attn_norm_hidden_size_cnt*64];
+                            end
+                            buffer_post_attn_norm_in <= 1'b0;
+                        end
+                        else begin
+                            O_proj <= 1'd0;
+                            Z0 <= 1'd0;
+                            W_post_attn_norm <= 1'd0;
+                            for(j = 0; j < 64; j = j + 1) begin
+                                buffer_post_attn_norm_in[j*BW_FP +: BW_FP] <= scaled_x[j + post_attn_norm_hidden_size_cnt*64];
+                            end
+                        end
+                    end
+                    else if(busy_post_attn_norm_fall) begin
+                        post_attn_norm_ready <= 1'd0;
+                        if(post_attn_norm_hidden_size_cnt >= 8'd31) begin
+                            post_attn_norm_decode_flag <= ~post_attn_norm_decode_flag;
+                            post_attn_norm_hidden_size_cnt <= 1'd0;
+                            if(post_attn_norm_decode_flag)
+                                seq_len <= seq_len + 1'd1;
+                        end
+                        else begin
+                            post_attn_norm_hidden_size_cnt <= post_attn_norm_hidden_size_cnt + 1'd1;
+                        end
+                    end
+                    else begin
+                        start_post_attn_norm_residual <= 1'b0;
+                    end
+                end
+                POST_ATTN_NORM_RESULT_CHECK: begin
+                    for (i =0 ; i< seq_len; i = i + 1) begin
+                        for(j = 0; j < 2048; j = j + 1) begin
+                            $display("post_attn_norm_result_golden[%0d]: %f", i*2048+j, post_attn_norm_result_golden[i*2048+j]);
+                            $display("post_attn_norm_result[%0d]: %f", i*2048+j, post_attn_norm_result[i*2048+j]);
+                            abs_error_temp =abs_error_temp + $abs(post_attn_norm_result_golden[i*2048+j] - post_attn_norm_result[i*2048+j]);
+                            if(post_attn_norm_result_golden[i*2048+j] != 0)
+                                relative_error_temp =relative_error_temp + $abs(post_attn_norm_result_golden[i*2048+j] - post_attn_norm_result[i*2048+j]) / $abs(post_attn_norm_result_golden[i*2048+j]);
+                        end
+                        abs_error[i] = abs_error_temp/2048;
+                        relative_error[i] = relative_error_temp/2048;
+                        abs_error_temp = 0.0;
+                        relative_error_temp = 0.0;
+                    end
+                    for (i =0 ; i< seq_len; i = i + 1) begin
+                        $display("abs_error[%0d]: %f", i, abs_error[i]);
+                        $display("relative_error[%0d]: %f", i, relative_error[i]);
+                    end
+                end
                 default : begin
-
+                    seq_len <= 7'd16;
+                    post_attn_norm_hidden_size_cnt <= 1'b0;
+                    start_post_attn_norm_residual <= 1'b0;
+                    start_post_attn_norm_sqrt <= 1'b0;
+                    post_attn_norm_ready <= 1'b0;
+                    O_proj <= 1'b0;
+                    Z0 <= 1'b0;
+                    buffer_post_attn_norm_in <= 1'b0;
+                    W_post_attn_norm <= 1'b0;
+                    post_attn_norm_seq_cnt <= 1'b0;
+                    state_select <= 1'b1;
+                    post_attn_norm_decode_flag <= 1'b0;
                 end
             endcase
         end
     end
 
-/******************** test ****************************/ 
-    reg [16:0] dec_to_bf16_test;
-    real test_value_1;
-    real test_value_2;
-    real test_value_3;
-    initial begin
-        // dec_to_bf16_test = dec_to_bf16(5);
-        // $display("dec_to_bf16_test: %b", dec_to_bf16_test);
-        test_value_1 = bf16_to_dec(17'h1f769);
-        $display("test_value1: %f", test_value_1);
-        test_value_2 = bf16_to_dec(17'h1f483);
-        $display("test_value2: %f", test_value_2);
-        test_value_3 = ffp_to_dec(29'hfe75500);
-        $display("test_value3: %f", test_value_3);
+    // ffn_residual fsm control
+    always @(posedge clk or negedge rst_n) begin
+        if(!rst_n) begin
+            ffn_residual_ready <= 1'b0;
+            start_ffn_residual <= 1'b0;
+            D_proj             <= 1'b0;
+            attn_residual_out  <= 1'b0;
+            ffn_residual_hidden_size_cnt <= 1'b0;
+        end 
+        else begin
+            case(state)
+                IDLE: begin
+                    ffn_residual_ready              <= 1'b0;
+                    start_ffn_residual              <= 1'b0;
+                    D_proj                          <= 1'b0;
+                    attn_residual_out               <= 1'b0;
+                    ffn_residual_hidden_size_cnt    <= 1'b0;
+                end
+                FFN_RESIDUAL : begin
+                    if(!ffn_residual_ready) begin
+                        start_ffn_residual <= 1'b1;
+                        ffn_residual_ready <= 1'b1;
+                        for(i = 0; i < M ; i = i + 1) begin
+                            for(j = 0; j < N; j = j + 1) begin
+                                D_proj[N*i*BW_FP + j*BW_FP +: BW_FP] <= down_proj[HIDDEN_SIZE*i + j + ffn_residual_hidden_size_cnt*N];
+                                attn_residual_out[N*i*BW_FP + j*BW_FP +: BW_FP] <= attn_residual_result[HIDDEN_SIZE*i + j + ffn_residual_hidden_size_cnt*N];
+                            end
+                        end
+                    end
+                    else if(busy_ffn_residual_fall) begin
+                        ffn_residual_ready <= 1'd0;
+                        ffn_residual_hidden_size_cnt <= ffn_residual_hidden_size_cnt + 1'd1;
+                    end
+                    else begin
+                        start_ffn_residual <= 1'b0;
+                    end
+                end
+                FFN_RESIDUAL_CHECK: begin
+                    for (i =0 ; i< 8; i = i + 1) begin
+                        for(j = 0; j < 2048; j = j + 1) begin
+                            $display("ffn_residual_result_golden[%0d]: %f", i*2048+j, ffn_residual_result_golden[i*2048+j]);
+                            $display("ffn_residual_result[%0d]: %f", i*2048+j, ffn_residual_result[i*2048+j]);
+                        end
+                    end
+                end
+                default : begin
+                    ffn_residual_ready              <= 1'b0;
+                    start_ffn_residual              <= 1'b0;
+                    D_proj                          <= 1'b0;
+                    attn_residual_out               <= 1'b0;
+                    ffn_residual_hidden_size_cnt    <= 1'b0;
+                end
+            endcase
+        end
     end
+/******************** test ****************************/ 
+    // reg [16:0] dec_to_bf16_test;
+    // real test_value_1;
+    // real test_value_2;
+    // real test_value_3;
+    // initial begin
+    //     dec_to_bf16_test = dec_to_bf16(5);
+    //     $display("dec_to_bf16_test: %b", dec_to_bf16_test);
+    //     test_value_1 = bf16_to_dec(17'h1f769);
+    //     $display("test_value1: %f", test_value_1);
+    //     test_value_2 = bf16_to_dec(17'h1f483);
+    //     $display("test_value2: %f", test_value_2);
+    //     test_value_3 = ffp_to_dec(29'hfe75500);
+    //     $display("test_value3: %f", test_value_3);
+    // end
 
 /******************** initial ****************************/ 
 	initial begin
-		rst_n = 1'b0;
-        rope_start = 1'b0;
-        post_attn_norm_start = 1'b0;
-        seq_len = 7'd16;
+		rst_n                   = 1'b0;
+        rope_start              = 1'b0;
+        post_attn_norm_start    = 1'b0;
+        ffn_residual_start      = 1'b0;
 		#(`clk_period*5 + 1);
-        rst_n = 1'b1;
+        rst_n                   = 1'b1;
 		#(`clk_period);
-        rope_start = 1'b0;
-        post_attn_norm_start = 1'b1;
+        rope_start              = 1'b0;
+        post_attn_norm_start    = 1'b0;
+        ffn_residual_start      = 1'b1;
         #(`clk_period);
-        rope_start = 1'b0;
-        post_attn_norm_start = 1'b0;
+        rope_start              = 1'b0;
+        post_attn_norm_start    = 1'b0;
+        ffn_residual_start      = 1'b0;
         #(`clk_period*20000);
 		$finish;		
 	end
