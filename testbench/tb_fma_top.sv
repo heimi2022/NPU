@@ -3,18 +3,19 @@
 
 module tb_fma_top;
 
-    parameter                       BW_EXP      =   8                   ;
-    parameter                       BW_MAN      =   9                   ;
-    parameter                       BW_FP       =   17                  ;
-    parameter                       BW_INT      =   8                   ;
-    parameter                       BW_ALIGN    =   9                   ;
-    parameter                       VALUE_MN    =   64                  ;
-    parameter                       M           =   8                   ;
-    parameter                       N           =   8                   ;
-    parameter                       K           =   16                  ;
+    parameter                       BW_EXP              =   8           ;
+    parameter                       BW_MAN              =   9           ;
+    parameter                       BW_FP               =   17          ;
+    parameter                       BW_INT              =   8           ;
+    parameter                       BW_ALIGN            =   9           ;
+    parameter                       VALUE_MN            =   64          ;
+    parameter                       M                   =   8           ;
+    parameter                       N                   =   8           ;
+    parameter                       K                   =   16          ;
 
-    localparam                      HEAD_DIM    =   64                  ;
-    localparam                      HIDDEN_SIZE =   2048                ;
+    localparam                      HEAD_DIM            =   64          ;
+    localparam                      HIDDEN_SIZE         =   2048        ;
+    localparam                      INTERMEDIATE_SIZE   =   8192        ;
 
 // instance signals
     reg                             clk                                 ;
@@ -37,25 +38,33 @@ module tb_fma_top;
     reg     [VALUE_MN*BW_FP -1:0]   W_sin                               ; 
     reg     [VALUE_MN*BW_FP -1:0]   buffer_post_attn_norm_in            ; //from SRAM,512b
     wire    [M*K     *BW_FP   -1:0] buffer_norm1_out                    ; //to SRAM,512b
-    wire    [VALUE_MN*2*BW_FP   -1:0] buffer_post_attn_norm_out           ; //to SRAM,512b
+    wire    [VALUE_MN*2*BW_FP -1:0] buffer_post_attn_norm_out           ; //to SRAM,512b
     wire                            rms_result_valid                    ; // post_attn_norm
     wire                            scaled_x_valid                      ; // post_attn_norm
     wire    [VALUE_MN*2*BW_FP -1:0] buffer_RoPE                         ;
     wire                            busy_RoPE                           ;
     wire                            busy_post_attn_norm                 ;
 
-    reg                                   start_ffn_residual              ;   // ffn_residual 
-    reg       [VALUE_MN*BW_FP -1:0]       D_proj                          ;   // ffn_residual 
-    reg       [VALUE_MN*BW_FP -1:0]       attn_residual_out               ;   // ffn_residual
-    wire                                  busy_ffn_residual               ;   // ffn_residual
-    wire      [VALUE_MN*BW_FP -1:0]       ffn_residual_out                ;   // ffn_residual
-    wire                                  ffn_residual_out_valid          ;   // ffn_residual    
+    reg                             start_ffn_residual                  ;   // ffn_residual 
+    reg       [VALUE_MN*BW_FP -1:0] D_proj                              ;   // ffn_residual 
+    reg       [VALUE_MN*BW_FP -1:0] attn_residual_out                   ;   // ffn_residual
+    wire                            busy_ffn_residual                   ;   // ffn_residual
+    wire      [VALUE_MN*BW_FP -1:0] ffn_residual_out                    ;   // ffn_residual
+    wire                            ffn_residual_out_valid              ;   // ffn_residual    
+
+    reg                             start_ffn_mul                       ;   // ffn_mul
+    reg       [VALUE_MN*BW_FP -1:0] U_proj                              ;   // ffn_mul
+    reg       [VALUE_MN*BW_FP -1:0] silu_in                             ;   // ffn_mul
+    wire                            busy_ffn_mul                        ;   // ffn_mul
+    wire      [VALUE_MN*BW_FP -1:0] ffn_mul_out                         ;   // ffn_mul
+    wire                            ffn_mul_out_valid                   ;   // ffn_mul
 
 // general tb signals
     integer                         i,j                                 ;
     reg                             rope_start                          ;
     reg                             post_attn_norm_start                ;
     reg                             ffn_residual_start                  ;
+    reg                             ffn_mul_start                       ;
     reg     [6:0]                   seq_len                             ;
 
 // rope
@@ -106,6 +115,16 @@ module tb_fma_top;
     reg     [7:0]                   ffn_residual_hidden_size_cnt        ;
     real                            ffn_residual_result   [0:131071]    ; // 8 * 2048 = 16384
 
+    reg     [BW_FP - 1:0]           up_proj                     [0:524287];
+    reg     [BW_FP - 1:0]           silu_gate                   [0:524287];
+
+    reg                             busy_ffn_mul_r                 ;
+    wire                            busy_ffn_mul_fall              ;
+
+    reg                             ffn_mul_ready                  ;
+    reg     [9:0]                   ffn_mul_intermediate_size_cnt  ;
+    real                            ffn_mul_result   [0:524287]    ;
+
 // FSM
     reg     [4:0]                   state, next_state                   ;
     // state
@@ -121,6 +140,8 @@ module tb_fma_top;
         POST_ATTN_NORM_RESULT_CHECK     =   5'd8    ,
         FFN_RESIDUAL                    =   5'd9    ,
         FFN_RESIDUAL_CHECK              =   5'd10   ,
+        FFN_MUL                         =   5'd11   ,
+        FFN_MUL_CHECK                   =   5'd12   ,
         STOP                            =   5'd31   ;
 
 /******************** inst_fma_top *********************************/ 
@@ -166,7 +187,13 @@ module tb_fma_top;
         .attn_residual_out            (attn_residual_out            ),   // ffn_residual
         .busy_ffn_residual            (busy_ffn_residual            ),   // ffn_residual
         .ffn_residual_out             (ffn_residual_out             ),   // ffn_residual
-        .ffn_residual_out_valid       (ffn_residual_out_valid       )    // ffn_residual    
+        .ffn_residual_out_valid       (ffn_residual_out_valid       ),   // ffn_residual    
+        .start_ffn_mul                (start_ffn_mul                ),   // ffn_mul
+        .U_proj                       (U_proj                       ),   // ffn_mul
+        .silu_in                      (silu_in                      ),   // ffn_mul
+        .busy_ffn_mul                 (busy_ffn_mul                 ),   // ffn_mul
+        .ffn_mul_out                  (ffn_mul_out                  ),   // ffn_mul
+        .ffn_mul_out_valid            (ffn_mul_out_valid            )    // ffn_mul
     );
 
 /********************read and convert data*********************************/ 
@@ -204,9 +231,15 @@ module tb_fma_top;
     // ffn
     reg [15:0]  down_proj_raw                   [0:131071]  ;   // 64*2048=131072
     reg [15:0]  ffn_residual_result_raw         [0:131071]  ;
+    reg [15:0]  up_proj_raw                     [0:524287]  ;   // 64*8192=524288
+    reg [15:0]  silu_gate_raw                   [0:524287]  ;
+    reg [15:0]  silu_dot_up_raw                 [0:524287]  ;
 
     real        down_proj_dec                   [0:131071]  ;
     real        ffn_residual_result_golden      [0:131071]  ;
+    real        up_proj_dec                     [0:524287]  ;   // 64*8192=524288
+    real        silu_golden                     [0:524287]  ;
+    real        ffn_mul_golden                  [0:524287]  ;
 
     // $readmemb :loads a text file with binary values into a memory array
     initial begin
@@ -228,6 +261,9 @@ module tb_fma_top;
     // ffn
         $readmemb("./ffn_data/down_proj_bf16.txt",down_proj_raw);
         $readmemb("./ffn_data/ffn_residual_result_bf16.txt",ffn_residual_result_raw);
+        $readmemb("./ffn_data/up_proj_bf16.txt",up_proj_raw);
+        $readmemb("./ffn_data/silu_gate_bf16.txt",silu_gate_raw);
+        $readmemb("./ffn_data/silu_dot_up_bf16.txt",silu_dot_up_raw);
 
 
     // Convert std BF16 to Real
@@ -253,6 +289,12 @@ module tb_fma_top;
             post_attn_norm_weight_dec[i] = std_bf16_to_dec(post_attn_norm_weight_raw[i]);
         end
 
+        for (i = 0; i < 524288; i = i + 1) begin
+            up_proj_dec[i]       = std_bf16_to_dec(up_proj_raw[i]);
+            silu_golden[i]       = std_bf16_to_dec(silu_gate_raw[i]);
+            ffn_mul_golden[i]    = std_bf16_to_dec(silu_dot_up_raw[i]);
+        end
+
         // Convert dec to BF16
         for (i = 0; i < 4096; i = i + 1) begin
             sin[i]      = dec_to_bf16(sin_dec[i]);
@@ -270,6 +312,11 @@ module tb_fma_top;
 
         for (i = 0; i < 2048; i = i + 1) begin
             post_attn_norm_weight[i] = dec_to_bf16(post_attn_norm_weight_dec[i]);
+        end
+
+        for (i = 0; i < 524288; i = i + 1) begin
+            up_proj[i]     = dec_to_bf16(up_proj_dec[i]);
+            silu_gate[i]   = dec_to_bf16(silu_golden[i]);
         end
     end
 
@@ -341,7 +388,7 @@ module tb_fma_top;
     end
 
 /************************** ffn ****************************/ 
-    //ffn residual
+//ffn residual
     // negedge edge detect
     always @(posedge clk or negedge rst_n) begin
         if(!rst_n) 
@@ -362,7 +409,25 @@ module tb_fma_top;
         end
     end
 
+//ffn mul
+    always @(posedge clk or negedge rst_n) begin
+        if(!rst_n) 
+            busy_ffn_mul_r <= 1'b0;
+        else 
+            busy_ffn_mul_r <= busy_ffn_mul;
+    end
+    assign busy_ffn_mul_fall = busy_ffn_mul_r && !busy_ffn_mul;
 
+    // 模拟sram 存储 rms 结果
+    always @(posedge clk or negedge rst_n) begin
+        if (ffn_mul_out_valid) begin
+            for (i = 0; i < M; i = i + 1) begin
+                for (j = 0; j < N; j = j + 1) begin
+                    ffn_mul_result[INTERMEDIATE_SIZE*i + j + ffn_mul_intermediate_size_cnt*N] = bf16_to_dec(ffn_mul_out[N*i*BW_FP + j*BW_FP +: BW_FP]);
+                end
+            end
+        end
+    end
 /******************** FSM ****************************/ 
 
     // update state
@@ -383,6 +448,8 @@ module tb_fma_top;
                     next_state = POST_ATTN_NORM_RESIDUAL_PREFILL;
                 else if(ffn_residual_start)
                     next_state = FFN_RESIDUAL;
+                else if(ffn_mul_start)
+                    next_state = FFN_MUL;
                 else
                     next_state = IDLE;
             end
@@ -452,6 +519,17 @@ module tb_fma_top;
                     next_state = FFN_RESIDUAL ;
             end
             FFN_RESIDUAL_CHECK : next_state = STOP ;
+            FFN_MUL : begin
+                if(busy_ffn_mul_fall) begin
+                    if(ffn_mul_intermediate_size_cnt == 10'd1023)
+                        next_state = FFN_MUL_CHECK ;
+                    else
+                        next_state = FFN_MUL ;
+                end
+                else
+                    next_state = FFN_MUL ;
+            end
+            FFN_MUL_CHECK : next_state = STOP ;
             STOP:    next_state = IDLE;
             default: next_state = IDLE;
         endcase
@@ -782,6 +860,62 @@ module tb_fma_top;
             endcase
         end
     end
+
+    // ffn_mul fsm control
+    always @(posedge clk or negedge rst_n) begin
+        if(!rst_n) begin
+            ffn_mul_ready <= 1'b0;
+            start_ffn_mul <= 1'b0;
+            U_proj        <= 1'b0;
+            silu_in       <= 1'b0;
+            ffn_mul_intermediate_size_cnt <= 1'b0;
+        end 
+        else begin
+            case(state)
+                IDLE: begin
+                    ffn_mul_ready <= 1'b0;
+                    start_ffn_mul <= 1'b0;
+                    U_proj        <= 1'b0;
+                    silu_in       <= 1'b0;
+                    ffn_mul_intermediate_size_cnt <= 1'b0;
+                end
+                FFN_MUL : begin
+                    if(!ffn_mul_ready) begin
+                        start_ffn_mul <= 1'b1;
+                        ffn_mul_ready <= 1'b1;
+                        for(i = 0; i < M ; i = i + 1) begin
+                            for(j = 0; j < N; j = j + 1) begin
+                                U_proj[N*i*BW_FP + j*BW_FP +: BW_FP] <= up_proj[INTERMEDIATE_SIZE*i + j + ffn_mul_intermediate_size_cnt*N];
+                                silu_in[N*i*BW_FP + j*BW_FP +: BW_FP] <= silu_gate[INTERMEDIATE_SIZE*i + j + ffn_mul_intermediate_size_cnt*N];
+                            end
+                        end
+                    end
+                    else if(busy_ffn_mul_fall) begin
+                        ffn_mul_ready <= 1'd0;
+                        ffn_mul_intermediate_size_cnt <= ffn_mul_intermediate_size_cnt + 1'd1;
+                    end
+                    else begin
+                        start_ffn_mul <= 1'b0;
+                    end
+                end
+                FFN_MUL_CHECK: begin
+                    for (i =0 ; i< 8; i = i + 1) begin
+                        for(j = 0; j < INTERMEDIATE_SIZE; j = j + 1) begin
+                            $display("ffn_mul_golden[%0d]: %f", i*INTERMEDIATE_SIZE+j, ffn_mul_golden[i*INTERMEDIATE_SIZE+j]);
+                            $display("ffn_mul_result[%0d]: %f", i*INTERMEDIATE_SIZE+j, ffn_mul_result[i*INTERMEDIATE_SIZE+j]);
+                        end
+                    end
+                end
+                default : begin
+                    ffn_mul_ready <= 1'b0;
+                    start_ffn_mul <= 1'b0;
+                    U_proj        <= 1'b0;
+                    silu_in       <= 1'b0;
+                    ffn_mul_intermediate_size_cnt <= 1'b0;
+                end
+            endcase
+        end
+    end
 /******************** test ****************************/ 
     // reg [16:0] dec_to_bf16_test;
     // real test_value_1;
@@ -804,16 +938,19 @@ module tb_fma_top;
         rope_start              = 1'b0;
         post_attn_norm_start    = 1'b0;
         ffn_residual_start      = 1'b0;
+        ffn_mul_start           = 1'b0;
 		#(`clk_period*5 + 1);
         rst_n                   = 1'b1;
 		#(`clk_period);
         rope_start              = 1'b0;
         post_attn_norm_start    = 1'b0;
-        ffn_residual_start      = 1'b1;
+        ffn_residual_start      = 1'b0;
+        ffn_mul_start           = 1'b1;
         #(`clk_period);
         rope_start              = 1'b0;
         post_attn_norm_start    = 1'b0;
         ffn_residual_start      = 1'b0;
+        ffn_mul_start           = 1'b0;
         #(`clk_period*20000);
 		$finish;		
 	end

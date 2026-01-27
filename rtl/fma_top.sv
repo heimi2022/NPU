@@ -42,8 +42,14 @@ module fma_top#(
     input       [VALUE_MN*BW_FP -1:0]       attn_residual_out               ,   // ffn_residual
     output                                  busy_ffn_residual               ,   // ffn_residual
     output      [VALUE_MN*BW_FP -1:0]       ffn_residual_out                ,   // ffn_residual
-    output                                  ffn_residual_out_valid              // ffn_residual    
+    output                                  ffn_residual_out_valid          ,   // ffn_residual 
 
+    input                               start_ffn_mul                       ,   // ffn_mul
+    input       [VALUE_MN*BW_FP -1:0]   U_proj                              ,   // ffn_mul
+    input       [VALUE_MN*BW_FP -1:0]   silu_in                             ,   // ffn_mul
+    output                              busy_ffn_mul                        ,   // ffn_mul
+    output      [VALUE_MN*BW_FP -1:0]   ffn_mul_out                         ,   // ffn_mul
+    output                              ffn_mul_out_valid                       // ffn_mul
 );
 
     //localparam BW_ALIGN = BW_MAN ; 
@@ -67,6 +73,10 @@ module fma_top#(
     wire [VALUE_MN*5     -1:0]   mode_ffn_residual       ;   // ffn_residual
     wire [VALUE_MN*BW_FP -1:0]   a_ffn_residual          ;   // ffn_residual
     wire [VALUE_MN*BW_FP -1:0]   c_ffn_residual          ;   // ffn_residual
+
+    wire [VALUE_MN*5     -1:0]   mode_ffn_mul        ;   // ffn_mul
+    wire [VALUE_MN*BW_FP -1:0]   a_ffn_mul           ;   // ffn_mul
+    wire [VALUE_MN*BW_FP -1:0]   b_ffn_mul           ;   // ffn_mul
 
     post_attn_norm_ctrl #(
         .BW_MAN   (BW_MAN   ) ,
@@ -119,6 +129,28 @@ module fma_top#(
         .ffn_residual_out      (ffn_residual_out            ),
         .ffn_residual_out_valid(ffn_residual_out_valid      ) 
     );
+
+    ffn_mul_ctrl #(
+        .BW_EXP  (BW_EXP  ),
+        .BW_MAN  (BW_MAN  ),
+        .BW_FP   (BW_FP   ),
+        .BW_INT  (BW_INT  ),
+        .VALUE_MN(VALUE_MN) 
+    )u_ffn_mul_ctrl(
+        .clk              (clk                          ),
+        .rst_n            (rst_n                        ),
+        .start_ffn_mul    (start_ffn_mul                ), 
+        .U_proj           (U_proj                       ),
+        .silu_in          (silu_in                      ),
+        .FMA_out          (FMA_out[0+:VALUE_MN*BW_FP]   ),     
+        .busy_ffn_mul     (busy_ffn_mul                 ),
+        .mode_ffn_mul     (mode_ffn_mul                 ),
+        .a_ffn_mul        (a_ffn_mul                    ),
+        .b_ffn_mul        (b_ffn_mul                    ),
+        .ffn_mul_out      (ffn_mul_out                  ),
+        .ffn_mul_out_valid(ffn_mul_out_valid            )   
+    );
+
 
     // norm1_ctrl #(
     //     .BW_MAN   (BW_MAN   ) ,
@@ -186,40 +218,46 @@ module fma_top#(
             align   <= 'b0 ;
         end 
         else begin
-            case ({busy_ffn_residual,busy_post_attn_norm,busy_norm1,busy_RoPE})
-                4'b0001: begin
+            case ({busy_ffn_mul,busy_ffn_residual,busy_post_attn_norm,busy_norm1,busy_RoPE})
+                5'b00001: begin
                     mode    <= mode_RoPE;
                     a       <= a_RoPE   ;
                     b       <= b_RoPE   ;
                     c       <= c_RoPE   ;
                     align   <= 'b0 ;
                 end
-                4'b0010: begin
+                5'b00010: begin
                     mode    <= {{((128-M*K)*5    ){1'b0}},mode_norm1};
                     a       <= {{((128-M*K)*BW_FP){1'b0}},a_norm1   };
                     b       <= {{((128-M*K)*BW_FP){1'b0}},b_norm1   };
                     c       <= {{((128-M*K)*BW_FP){1'b0}},c_norm1   };
                     align   <= 'b0 ;
                 end
-                4'b0100: begin
+                5'b00100: begin
                     mode    <= {{((128-VALUE_MN)*5    ){1'b0}},mode_post_attn_norm};
                     a       <= {{((128-VALUE_MN)*BW_FP){1'b0}},a_post_attn_norm   };
                     b       <= {{((128-VALUE_MN)*BW_FP){1'b0}},b_post_attn_norm   };
                     c       <= {{((128-VALUE_MN)*BW_FP){1'b0}},c_post_attn_norm   };
                     align   <= 'b0 ;
                 end
-                4'b1000: begin
+                5'b01000: begin
                     mode    <= {{((128-VALUE_MN)*5    ){1'b0}},mode_ffn_residual};
                     a       <= {{((128-VALUE_MN)*BW_FP){1'b0}},a_ffn_residual   };
                     c       <= {{((128-VALUE_MN)*BW_FP){1'b0}},c_ffn_residual   };
                     align   <= 'b0 ;
                 end
-                default: begin
-                    mode    <= 'b0 ;
-                    a       <= 'b0 ;
-                    b       <= 'b0 ;
-                    c       <= 'b0 ;
+                5'b10000: begin
+                    mode    <= {{((128-VALUE_MN)*5    ){1'b0}},mode_ffn_mul};
+                    a       <= {{((128-VALUE_MN)*BW_FP){1'b0}},a_ffn_mul   };
+                    b       <= {{((128-VALUE_MN)*BW_FP){1'b0}},b_ffn_mul   };
                     align   <= 'b0 ;
+                end
+                default: begin
+                    mode    <= 1'b0 ;
+                    a       <= 1'b0 ;
+                    b       <= 1'b0 ;
+                    c       <= 1'b0 ;
+                    align   <= 1'b0 ;
                 end
             endcase
         end

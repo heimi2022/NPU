@@ -9,8 +9,8 @@ module ffn_residual_ctrl#(
     input                               rst_n                   ,
     input                               start_ffn_residual      , //pulse
 
-    input       [VALUE_MN*BW_FP -1:0]   D_proj                  , //8*8 OR ?
-    input       [VALUE_MN*BW_FP -1:0]   attn_residual_out       , //8*8 OR ?
+    input       [VALUE_MN*BW_FP -1:0]   D_proj                  ,
+    input       [VALUE_MN*BW_FP -1:0]   attn_residual_out       ,
     input       [VALUE_MN*BW_FP -1:0]   FMA_out                 ,     
 
     output  reg                         busy_ffn_residual       ,

@@ -3,78 +3,75 @@ module ffn_mul_ctrl#(
     parameter BW_MAN   = 9   ,
     parameter BW_FP    = 17  ,
     parameter BW_INT   = 8   ,
-    parameter VALUE_MK = 128
+    parameter VALUE_MN = 64     
 )(
-    input                        clk                 ,
-    input                        rst_n               ,
-    input                        state_prefill       ,
-    input                        state_decode        ,
-    input                        start_ffn_mul       , //pulse
+    input                               clk                 ,
+    input                               rst_n               ,
+    input                               start_ffn_mul       , 
 
-    input       [VALUE_MK*BW_FP -1:0]  U_proj              , //8*16 OR ?
-    input       [VALUE_MK*BW_FP -1:0]  silu_in             , //8*16 OR ?
-    input       [VALUE_MK*BW_FP -1:0]  FMA_out             ,     
+    input       [VALUE_MN*BW_FP -1:0]   U_proj              ,
+    input       [VALUE_MN*BW_FP -1:0]   silu_in             ,
+    input       [VALUE_MN*BW_FP -1:0]   FMA_out             ,     
 
-    output  reg                        busy_ffn_mul        ,
-    output  reg [VALUE_MK*5     -1:0]  mode_ffn_mul        ,
-    output  reg [VALUE_MK*BW_FP -1:0]  a_ffn_mul           ,
-    output  reg [VALUE_MK*BW_FP -1:0]  b_ffn_mul           ,
+    output  reg                         busy_ffn_mul        ,
+    output  reg [VALUE_MN*5     -1:0]   mode_ffn_mul        ,
+    output  reg [VALUE_MN*BW_FP -1:0]   a_ffn_mul           ,
+    output  reg [VALUE_MN*BW_FP -1:0]   b_ffn_mul           ,
 
-    output  reg [VALUE_MK*BW_FP -1:0]  buffer_mul_out         
-
+    output  reg [VALUE_MN*BW_FP -1:0]   ffn_mul_out         ,
+    output  reg                         ffn_mul_out_valid
 );
 
-    localparam CYCLE1 = 2'd3 ;
+    localparam CYCLE1 = 2'd2;
     reg [1:0] cnt ;
-
-
-
-    integer i ;
 
     //state ctrl
     always@(posedge clk or negedge rst_n) begin
         if(!rst_n) begin
-            cnt   <= 'b0; 
-            busy_ffn_mul <= 'b0;
+            cnt             <= 1'b0; 
+            busy_ffn_mul    <= 1'b0;
         end else begin
             if(start_ffn_mul) begin
-                busy_ffn_mul <= 1'b1;
-                cnt   <=  'b0;
+                busy_ffn_mul    <= 1'b1;
+                cnt             <=  1'b0;
             end 
-            
             else if(busy_ffn_mul) begin
-                if(cnt == CYCLE1) begin
-                    cnt   <= 'b0;
-                    busy_ffn_mul <= 'b0;
+                if(cnt >= CYCLE1) begin
+                    cnt   <= 1'b0;
+                    busy_ffn_mul <= 1'b0;
                 end
-                else cnt <= cnt + 1;
+                else cnt <= cnt + 1'b1;
             end         
         end
     end
 
-//  .  .   1       2       3       4       5       6       7       8       9      10      11      12      13      14      15      16    
-//     +---+   +---+   +---+   +---+   +---+   +---+   +---+   +---+   +---+   +---+   +---+   +---+   +---+   +---+   +---+   +---+   +
-// clk |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |
-//     +   +---+   +---+   +---+   +---+   +---+   +---+   +---+   +---+   +---+   +---+   +---+   +---+   +---+   +---+   +---+   +---+
+//  .  .   1       2       3       4   
+//     +---+   +---+   +---+   +---+   
+// clk |   |   |   |   |   |   |   |   
+//     +   +---+   +---+   +---+   +---
 
-// mode|       |  MUL  |       |       |       |       |       |       |       |       |       |       |       |       |       |
-// op  |       |       |       |       |       |       |       |       |       |       |       |       |       |       |       |
-// IN  | INPUT |       |       |       |       |       |       |       |       |       |       |       |       |       |       |       
-// OUT |       |       | OUT   |       |       |       |       |       |       |       |       |       |       |       |       |       
+// mode|       |  MUL  |       |     
+// op  |       |       |       |     
+// IN  | INPUT |       |       |           
+// OUT |       |       | OUT   |           
 
-
-    assign a_ffn_mul = (cnt==1) ? U_proj  : 0;
-    assign b_ffn_mul = (cnt==1) ? silu_in : 0;
+    assign mode_ffn_mul = (cnt==1'b0) ? {VALUE_MN{5'b00010}} : 1'b0; //MUL
+    assign a_ffn_mul    = (cnt==1'b0) ? U_proj  : 1'b0;
+    assign b_ffn_mul    = (cnt==1'b0) ? silu_in : 1'b0;
 
     always@(posedge clk or negedge rst_n) begin
         if(!rst_n) begin
-            buffer_mul_out <= 0 ;
+            ffn_mul_out <= 0 ;
+            ffn_mul_out_valid <= 1'b0;
         end else begin
-            if(cnt==3) buffer_mul_out <= FMA_out ;
+            if(cnt==2'd2) begin
+                ffn_mul_out <= FMA_out ;
+                ffn_mul_out_valid <= 1'b1;
+            end
+            else begin
+                ffn_mul_out_valid <= 1'b0;
+            end
         end
-
     end
-
-
 
 endmodule
